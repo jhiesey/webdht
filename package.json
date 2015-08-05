@@ -1,0 +1,38 @@
+{
+  "name": "webdht",
+  "version": "0.0.1",
+  "description": "A DHT that runs in the browser",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "browserify index.js > bootstrap/static/bundle.js && node bootstrap/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/jhiesey/webdht.git"
+  },
+  "keywords": [
+    "web",
+    "dht",
+    "webrtc",
+    "distributed",
+    "hash",
+    "table"
+  ],
+  "author": "John Hiesey",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/jhiesey/webdht/issues"
+  },
+  "homepage": "https://github.com/jhiesey/webdht#readme",
+  "dependencies": {
+    "browserify": "^11.0.1",
+    "express": "^4.13.3",
+    "hat": "0.0.3",
+    "inherits": "^2.0.1",
+    "rpc-stream": "^2.1.1",
+    "simple-peer": "^5.11.4",
+    "simple-websocket": "^2.3.4",
+    "websocket-stream": "^1.5.1"
+  }
+}
