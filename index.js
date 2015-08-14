@@ -5,6 +5,14 @@ var inherits = require('inherits')
 var rpc = require('rpc-stream')
 var SimplePeer = require('simple-peer')
 var SimpleWebsocket = require('simple-websocket')
+var websocket = require('websocket-stream')
+
+/*
+TODO list:
+* handle both sides trying to connect
+* proper routing table
+* ref counting
+*/
 
 /*
 Concept: Node is base class, BootstrapNode is subclass
@@ -66,6 +74,9 @@ var Node = function (stream, isDirect, myId) {
 
 			self._directConn.signal(data)
 			cb(null)
+		},
+		getId: function (cb) {
+			cb(null, myId)
 		}
 	}
 
@@ -91,10 +102,22 @@ var Node = function (stream, isDirect, myId) {
 
 	self._conn.on('error', self.emit.bind(self, 'error'))
 
-	self.findNode(myId) // TODO: don't always look ourself up
+	Object.defineProperty(self, 'isDirect', {
+		get: function () {
+			return !!self._directConn
+		}
+	})
+
+	// self.findNode(myId) // TODO: don't always look ourself up
 }
 
 inherits(BaseNode, EventEmitter)
+
+Node.prototype.getId = function (cb) {
+	var self = this
+
+	self.handle.getId(cb)
+}
 
 Node.prototype.connectDirect = function (cb) {
 	var self = this
@@ -157,29 +180,39 @@ Node.prototype.connectFrom = function (id, stream, cb) {
 	self._handle.connectFrom(id, cb)
 }
 
-SocketNode = function (url, myId) {
-	var self = this
-	self.url = url
-	self.myId = myId
+// SocketNode = function (url, myId) {
+// 	var self = this
+// 	self.url = url
+// 	self.myId = myId
 
 
-}
+// }
 
 var N = 8 // number of nodes to get in one fetch
 
-var DHT = function (id, bootstrapNodes) {
+var DHT = function (id, bootstrapNodes, listenPort) {
 	var self = this
 	self.id = id
 	self.nodes = {}
 
+	self.nodesByUrl = {}
 
-
+	if (listenPort) {
+		var server = http.createServer()
+		var wss = websocket.createServer({
+			server: server
+		}, function (stream) {
+			self.connect({
+				directStream: stream
+			})
+		})
+	}
 }
 
-DHT.prototype._attachNode = function (node) {
+DHT.prototype._attachNode = function (id, node) {
 	var self = this
 
-	self.nodes[node.id] = node
+	self.nodes[id] = node
 
 	node.on('findNode', self.onFindNode.bind(self, id))
 
@@ -195,24 +228,77 @@ DHT.prototype._attachNode = function (node) {
 		if (self.nodes[id])
 			return cb('Attempt to connect in both directions') // TODO: what should happen?
 
-		// TODO: don't send stream for websocket nodes. Just connect directly here
-
-		var newNode = new Node(stream, false, self.id)
-
-		self._attachNode(newNode)
+		self.connect({
+			id: id,
+			webrtc: true,
+			indirectStream: stream,
+		})
 	})
 }
 
-// TODO: make this depend on the type of connection
-DHT.prototype.connect = function (bridge, id, cb) {
+/*
+REAL descriptor (over the wire): {
+	url: 'wss://foo.bar',
+	id: '1234abcd'
+}
+
+*/
+
+/*
+socket descriptor: {
+	url: 'wss://foo.bar', // optional
+	id: '1234abcd', // optional, required if webrtc is specified
+	bridge: Node // optional; one of stream or bridge must be provided if webrtc and !url
+	indirectStream: DuplexStream // optional; one of stream or bridge must be provided if webrtc and !url
+	directStream: DuplexStream // optional; provided for websocket server case
+}
+*/
+
+DHT.prototype.connect = function (descriptor, cb) {
 	var self = this
 
-	// TODO: don't do this for websocket nodes
-	var stream = bridge.connectTo(id, cb)
+	if (descriptor.id && self.nodes[descriptor.id])
+		console.error('already connected')
+		// TODO: handle this properly
 
-	var newNode = new Node(stream, false, self.id)
+	if (descriptor.url && self.nodes[descriptor.url])
+		console.error('already connected')
+		// TODO: handle this properly
 
-	self._attachNode(newNode)
+	var stream
+	var newNode
+	if (descriptor.url) {
+		stream = new SimpleWebsocket(descriptor.url)
+		newNode = new Node(stream, true, self.id)
+		newNode.url = descriptor.url
+		stream.on('connect', function () {
+			newNode.getId(function (err, id) {
+				if (!err)
+					self.nodes[id] = newNode
+				cb(err, newNode)
+			})
+		})
+		self.nodesByUrl[descriptor.url] = newNode 
+		self._attachNode(newNode)
+	} else if (descriptor.directStream) {
+		stream = descriptor.indirectStream
+		newNode = new Node(stream, true, self.id)
+		newNode.getId(function (err, id) {
+			if (!err)
+				self.nodes[id] = newNode
+			cb(err, newNode)
+		})
+	} else if (descriptor.indirectStream) {
+		stream = descriptor.indirectStream
+		newNode = new Node(stream, false, self.id)
+		self.nodes[descriptor.id] = newNode
+		self._attachNode(newNode)
+	} else if (descriptor.bridge) {
+		stream = bridge.connectTo(descriptor.id, cb)
+		newNode = new Node(stream, false, self.id)
+		self.nodes[descriptor.id] = newNode
+		self._attachNode(newNode)
+	}
 
 	return newNode
 }
@@ -245,9 +331,20 @@ DHT.prototype.onFindNode = function (id, cb) {
 
 	var closest = self.getClosest(id, Object.keys(self.nodes))
 
+	var nodes = closest.map(function (nodeId) {
+		var node = self.nodes[nodeId]
+		var ret = {
+			id: nodeId
+			direct: node.isDirect
+		}
+		if (node.url)
+			ret.url = node.url
+		return ret
+	})
+
 	console.log('findNode called on us, result:', closest)
 
-	cb(null, closest)
+	cb(null, nodes)
 }
 
 function arrEq (arr1, arr2) {
@@ -265,12 +362,6 @@ var ALPHA = 3
 
 var SEARCH_K = 8
 
-/*
-Find non-queried nodes
-
-*/
-
-
 // calls cb with list of ids
 DHT.prototype.findNode = function (id, cb) {
 	var self = this
@@ -281,7 +372,8 @@ DHT.prototype.findNode = function (id, cb) {
 			node: self.nodes[id], // either node or origin should be specified
 			origin: null,
 			startedQuery: false,
-			finishedQuery: false
+			finishedQuery: false,
+			direct: self.nodes[id].isDirect
 		}
 	})
 
@@ -306,27 +398,35 @@ DHT.prototype.findNode = function (id, cb) {
 				entry.startedQuery = true
 				// connect and query
 				if(!entry.node) {
-					entry.node = self.connect(entry.origin, entry.id)
+					entry.node = self.connect({
+						url: entry.url,
+						id: entry.id,
+						bridge: entry.origin
+					})
 				}
-				entry.node.findNode(id, function (err, closerIds) {
+				entry.node.findNode(id, function (err, closerDescriptors) {
 					entry.finishedQuery = true
 					if (err) {
 						console.error('error querying node:', entry.id)
 						return
 					}
 					// Push results in
-					closerIds.filter(function (closerId) {
+					closerDescriptors.filter(function (closer) {
+						var closerId = closer.id
 						return !closest.any(function (entry) {
 							return entry.id === closerId
 						})
 					})
-					var toAdd = closerIds.map(function (closerId) {
+					var toAdd = closerDescriptors.map(function (closer) {
+						var closerId = closer.id
 						return {
 							id: closerId,
 							node: null, // Duplicates will have been filtered by now
 							origin: entry.node,
 							startedQuery: false,
-							finishedQuery: false
+							finishedQuery: false,
+							url: closer.url,
+							direct: closer.direct
 						}
 					})
 					closest.push(toAdd)
@@ -348,307 +448,6 @@ DHT.prototype.findNode = function (id, cb) {
 	}
 	makeRequests()
 }
-
-
-
-
-	// var node = self.nodes[id]
-	// node.findNode(id, function (err, nodes) {
-	// 	if (err)
-	// 		return console.error('failed to find node:', err)
-	// 	nodes.forEach(function (node) {
-	// 		console.log('got node:', node)
-	// 	})
-	// })
-}
-
-
-
-// BaseNode.prototype._init = function () {
-// 	var self = this
-
-
-// }
-
-// Peer.prototype.sendOffer = function (id, offer, cb) {
-// 	var self = this
-
-// 	self._handle.sendOffer(id, offer, cb)
-// }
-
-// Peer.prototype.offer = function (fromId, offer, cb) {
-// 	var self = this
-// 	self._handle.offer(fromId, offer, cb)
-// }
-
-// // given an offer, respond
-// Peer.prototype.onOffer = function (offer, cb) {
-// 	var self = this
-// 	if (self._conn) {
-// 		self._conn.destroy()
-// 		// return cb(new Error('already connected'))
-// 	}
-
-// 	// self._connRefcount++
-// 	// self._refcount++
-// 	self._conn = new SimplePeer({
-// 		trickle: false
-// 	})
-// 	self._conn.signal(offer)
-// 	self._conn.on('signal', function (answer) {
-// 		cb(null, answer)
-// 	})
-// 	self._conn.on('connect', function () {
-// 		self.connected = true
-// 		self.emit('connect')
-// 	})
-// }
-
-// Peer.prototype.findNode = function (id) {
-// 	var self = this
-
-// 	self._handle.findNode(id, function (err, nodes) {
-// 		if (err) {
-// 			console.error('Error in findNode:', err)
-// 			return
-// 		}
-
-// 		self.emit('nodes', self, nodes)
-// 	})
-// }
-
-// Peer.prototype.connect = function (cb) {
-// 	var self = this
-// 	// Ignore duplicate attempts
-// 	if (self._conn)
-// 		return
-// 	// TODO: check gateway is defined/connected
-// 	if (cb)
-// 		self.once('connect', cb)
-// 	self._conn = new SimplePeer({
-// 		initiator: true,
-// 		trickle: false
-// 	})
-// 	self._conn.on('signal', function (offer) {
-// 		// send to gateway
-// 		self.gateway.sendOffer(self.id, offer, function (err, answer) {
-// 			if (err) {
-// 				console.error(err)
-// 				return
-// 			}
-// 			self._conn.signal(answer)
-// 		})
-// 	})
-// 	self._conn.on('connect', function () {
-// 		self.connected = true
-// 		self.emit('connect')
-// 	})
-// }
-
-var BootstrapNode = function (url, dht) {
-	var self = this
-	EventEmitter.call(self)
-	self.dht = dht
-
-	self._conn = new SimpleWebsocket(url)
-	self.connected = false
-
-	var api = {}
-	Object.keys(dht.bootstrapRpcHandlers).forEach(function (method) {
-		api[method] = dht.bootstrapRpcHandlers[method].bind(dht, self)
-	})
-
-	var rpcInstance = new rpc(api)
-	self._handle = rpcInstance.wrap(['getNodes', 'sendOffer'])
-
-	self._conn.on('connect', function () {
-		self._conn.pipe(rpcInstance).pipe(self._conn)
-		self.connected = true
-
-		self._conn.on('close', function () {
-			self.connected = false
-			self._conn = null
-			//TODO: reconnect?
-			self.emit('close')
-		})
-		self._conn.on('error', self.emit.bind(self, 'error'))
-		self.emit('connect')
-		self.getNodes()
-	})
-}
-
-inherits(BootstrapNode, EventEmitter)
-
-BootstrapNode.prototype.getNodes = function () {
-	var self = this
-
-	self._handle.getNodes(self.dht.id, function (err, nodes) {
-		if (err) {
-			console.error('Failed to get bootstrap nodes')
-			console.error(err.message)
-			return
-		}
-		self.emit('nodes', self, nodes)
-	})
-}
-
-BootstrapNode.prototype.sendOffer = function (id, offer, cb) {
-	var self = this
-
-	self._handle.sendOffer(id, offer, cb)
-}
-
-var N = 8 // number of nodes to get in one fetch
-
-var DHT = function (id, bootstrap) {
-	var self = this
-	self.id = id
-	// self.routingTable = new KBucket() // TODO: construct properly
-	// self.bucketMask = new BitField(1) // TODO: construct properly
-
-	self.nodes = {}
-
-	// self.storage = {}
-
-	// self.rpcHandlers = {
-	// 	findNode: self._onFindNode,
-	// 	// findValue: self._onFindValue,
-	// 	sendOffer: self._onSendOffer,
-	// 	offer: self._onOffer,
-	// 	// getRoutingPeer: self._onGetRoutingPeer,
-	// 	// updateBucketMask: self._onUpdateBucketMask
-	// }
-
-	// self.bootstrapRpcHandlers = {
-	// 	offer: self._onOffer
-	// }
-
-	// self.bootstrapNodes = bootstrap.forEach(function (url) {
-	// 	var node = new BootstrapNode(url, self)
-	// 	node.on('nodes', self._onNodes.bind(self))
-	// 	return node
-	// })
-
-	self._onNodes()
-}
-
-// DHT.prototype._onNodes = function (node, ids) {
-// 	var self = this
-// 	console.log('got peers:', ids)
-
-// 	var fromBootstrap = node instanceof BootstrapNode
-// 	var gotOne = false
-// 	ids.forEach(function (id) {
-// 		if (id === self.id)
-// 			return
-// 		var peer = self._getPeer(id, node)
-// 		// TODO: don't always connect
-// 		if (!fromBootstrap || !gotOne) {
-// 			console.log('connecting to:', id)
-// 			peer.connect()
-// 		} else {
-// 			console.log('NOT connecting to:', id)
-// 		}
-// 		gotOne = true
-// 	})
-// }
-
-// DHT.prototype._getPeer = function (id, gateway) {
-// 	var self = this
-// 	var peer = self.peers[id]
-// 	if (peer) {
-// 		return peer //.ref()
-// 	}
-// 	peer = new Peer(id, self, gateway)
-// 	peer.on('nodes', self._onNodes.bind(self))
-// 	self.peers[id] = peer
-// 	return peer
-// }
-
-DHT.prototype._onFindNode = function (from, id, cb) {
-	var self = this
-
-	// var closest = self.routingTable.closest({
-	// 	id: id
-	// }, N)
-
-	var allNodes = Object.keys(self.peers)
-	var idBuf = new Buffer(id, 'hex')
-	allNodes.sort(function (left, right) {
-		var leftBuf = new Buffer(left, 'hex')
-		var rightBuf = new Buffer(right, 'hex')
-		for (var i = 0; i < 20; i++) {
-			var byteXorDelta = leftBuf[i] ^ idBuf[i] - rightBuf[i] ^ idBuf[i]
-			if (byteXorDelta)
-				return byteXorDelta
-		}
-		return 0
-	})
-
-	var closest = allNodes.slice(0, N)
-
-	console.log('findNode called on us, result:', closest)
-
-	cb(null, closest)
-}
-
-// DHT.prototype._onFindValue = function (from, id, cb) {
-// 	var self = this
-
-// 	if (id in self.storage) {
-// 		cb(null, null) // itsMe
-// 	}
-
-// 	self._onFindNode.apply(arguments)
-// }
-
-DHT.prototype._onSendOffer = function (from, id, offer, cb) {
-	var self = this
-
-	var peer = self._getPeer(id)
-	if (!peer.connected) {
-		return cb(new Error('no connection'))
-	}
-
-	peer.offer(from.id, offer, cb)
-}
-
-DHT.prototype._onOffer = function (from, id, offer, cb) {
-	var self = this
-	// create peer if not exists
-	var peer = self._getPeer(id, from)
-
-	peer.onOffer(offer, cb)
-}
-
-// DHT.prototype._onGetRoutingPeer = function (from, id, depth, cb) {
-// 	var self = this
-
-// 	if (depth >= self.bucketMask.length)
-// 		return cb(null, []) // no suggestions for routing
-
-// 	if (!self.bucketMask.get(depth))
-// 		peers.push(self.id) // we have space ourself
-
-// 	var bucket = Math.max(self.bucketMask.length - 1, depth)
-
-// 	// iterate over peers in bucket
-// 	var peers = []
-// 	self.routingTable.getPeers(bucket).forEach(function (id) { // TODO: make this work!
-// 		var peer = self.peers[id]
-// 		if (bucket < peer.bucketMask.length && !peer.bucketMask.get(depth))
-// 			peers.push(peer.id)
-// 	}
-
-// 	cb(null, peers)
-// }
-
-// DHT.prototype.updateBootstrapPeers = function (from, peers) {
-// 	var self = this
-
-// 	// TODO: do something with peers
-// }
-
 
 var id //= localStorage.nodeId
 
