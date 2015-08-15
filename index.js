@@ -66,18 +66,18 @@ var Node = function (stream, isDirect, myId) {
 			var subStream = self._mux.createSharedStream('from:' + id)
 			self.emit('connectFrom', self, id, subStream, cb)
 		},
-		// iceCandidate: function (initiator, data, cb) {
-		// 	if (!self._directConn && !initiator) //
-		// 		return cb(new Error('Neither side is initiating connection'))
-		// 	else if (!self._directConn)
-		// 		self._setupDirectConn(false)
+		iceCandidate: function (initiator, data, cb) {
+			if (!self._directConn && !initiator) //
+				return cb(new Error('Neither side is initiating connection'))
+			else if (!self._directConn)
+				self._setupDirectConn(false)
 
-		// 	if (initiator && self._rpcIinitator)
-		// 		return // TODO: both sides are trying to connect
+			if (initiator && self._rpcIinitator)
+				return // TODO: both sides are trying to connect
 
-		// 	self._directConn.signal(data)
-		// 	cb(null)
-		// },
+			self._directConn.signal(data)
+			cb(null)
+		},
 		getId: function (cb) {
 			cb(null, myId)
 		}
@@ -137,21 +137,21 @@ Node.prototype.connectDirect = function (cb) {
 Node.prototype._setupDirectConn = function (initiator) {
 	var self = this
 
-	// self._rpcIinitator = initiator
-	// self._directConn = new SimplePeer({
-	// 	initiator: initiator
-	// })
+	self._rpcIinitator = initiator
+	self._directConn = new SimplePeer({
+		initiator: initiator
+	})
 
-	// self._directConn.on('signal', function (data) {
-	// 	self._handle.iceCandidate(initiator, data, function (err) {
-	// 		if (err) {
-	// 			console.error('error in ice candidate:', err) // TODO: error handling
-	// 		}
-	// 	})
-	// })
-	// self._directConn.on('connect', function () {
-	// 	self.emit('direct')
-	// })
+	self._directConn.on('signal', function (data) {
+		self._handle.iceCandidate(initiator, data, function (err) {
+			if (err) {
+				console.error('error in ice candidate:', err) // TODO: error handling
+			}
+		})
+	})
+	self._directConn.on('connect', function () {
+		self.emit('direct')
+	})
 }
 
 Node.prototype.findNode = function (id, cb) {
