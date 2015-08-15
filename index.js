@@ -1,12 +1,14 @@
 
 var EventEmitter = require('events').EventEmitter
 var hat = require('hat')
+var http = require('http')
 var inherits = require('inherits')
 var rpc = require('rpc-stream')
 var SimplePeer = require('simple-peer')
 var SimpleWebsocket = require('simple-websocket')
 var websocket = require('websocket-stream')
 var SwitchableStream = require('./switchable-stream')
+var multiplex = require('multiplex')
 
 /*
 TODO list:
@@ -64,18 +66,18 @@ var Node = function (stream, isDirect, myId) {
 			var subStream = self._mux.createSharedStream('from:' + id)
 			self.emit('connectFrom', self, id, subStream, cb)
 		},
-		iceCandidate: function (initiator, data, cb) {
-			if (!self._directConn && !initiator) //
-				return cb(new Error('Neither side is initiating connection'))
-			else if (!self._directConn)
-				self._setupDirectConn(false)
+		// iceCandidate: function (initiator, data, cb) {
+		// 	if (!self._directConn && !initiator) //
+		// 		return cb(new Error('Neither side is initiating connection'))
+		// 	else if (!self._directConn)
+		// 		self._setupDirectConn(false)
 
-			if (initiator && self._rpcIinitator)
-				return // TODO: both sides are trying to connect
+		// 	if (initiator && self._rpcIinitator)
+		// 		return // TODO: both sides are trying to connect
 
-			self._directConn.signal(data)
-			cb(null)
-		},
+		// 	self._directConn.signal(data)
+		// 	cb(null)
+		// },
 		getId: function (cb) {
 			cb(null, myId)
 		}
@@ -112,12 +114,12 @@ var Node = function (stream, isDirect, myId) {
 	// self.findNode(myId) // TODO: don't always look ourself up
 }
 
-inherits(BaseNode, EventEmitter)
+inherits(Node, EventEmitter)
 
 Node.prototype.getId = function (cb) {
 	var self = this
 
-	self.handle.getId(cb)
+	self._handle.getId(cb)
 }
 
 Node.prototype.connectDirect = function (cb) {
@@ -135,21 +137,21 @@ Node.prototype.connectDirect = function (cb) {
 Node.prototype._setupDirectConn = function (initiator) {
 	var self = this
 
-	self._rpcIinitator = initiator
-	self._directConn = new SimplePeer({
-		initiator: initiator
-	})
+	// self._rpcIinitator = initiator
+	// self._directConn = new SimplePeer({
+	// 	initiator: initiator
+	// })
 
-	self._directConn.on('signal', function (data) {
-		self._handle.iceCandidate(initiator, data, function (err) {
-			if (err) {
-				console.error(err) // TODO: error handling
-			}
-		})
-	})
-	self._directConn.on('connect', function () {
-		self.emit('direct')
-	})
+	// self._directConn.on('signal', function (data) {
+	// 	self._handle.iceCandidate(initiator, data, function (err) {
+	// 		if (err) {
+	// 			console.error('error in ice candidate:', err) // TODO: error handling
+	// 		}
+	// 	})
+	// })
+	// self._directConn.on('connect', function () {
+	// 	self.emit('direct')
+	// })
 }
 
 Node.prototype.findNode = function (id, cb) {
@@ -159,15 +161,16 @@ Node.prototype.findNode = function (id, cb) {
 }
 
 // returns stream AND puts it in the callback
-Node.prototype.connectTo = function (id, cb) {
+Node.prototype.connectTo = function (id) {
 	var self = this
 
 	var stream = self._mux.createSharedStream('to:' + id)
 	self._handle.connectTo(id, function (err) {
 		if (err)
-			return cb(err)
+			console.error('error in connectTo:', err)
+			// return cb(err)
 
-		cb(null, stream)
+		// cb(null, stream)
 	})
 
 	return stream
@@ -176,7 +179,7 @@ Node.prototype.connectTo = function (id, cb) {
 Node.prototype.connectFrom = function (id, stream, cb) {
 	var self = this
 
-	var from = self._mux.createSharedStream('from:' + fromId)
+	var from = self._mux.createSharedStream('from:' + id)
 	stream.pipe(from).pipe(stream)
 	self._handle.connectFrom(id, cb)
 }
@@ -207,6 +210,7 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 				directStream: stream
 			})
 		})
+		server.listen(listenPort)
 	}
 
 	bootstrapNodes = bootstrapNodes || []
@@ -217,12 +221,10 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 	})
 }
 
-DHT.prototype._attachNode = function (id, node) {
+DHT.prototype._attachNode = function (node) {
 	var self = this
 
-	self.nodes[id] = node
-
-	node.on('findNode', self.onFindNode.bind(self, id))
+	node.on('findNode', self.onFindNode.bind(self))
 
 	node.on('connectTo', function (from, id, stream, cb) {
 		var to = self.nodes[id]
@@ -281,30 +283,41 @@ DHT.prototype.connect = function (descriptor, cb) {
 		newNode.url = descriptor.url
 		stream.on('connect', function () {
 			newNode.getId(function (err, id) {
-				if (!err)
+				if (!err) {
 					self.nodes[id] = newNode
-				cb(err, newNode)
+					newNode.id = id
+				}
+				console.log('connected (url) to node with id:', id)
+				// cb(err, newNode)
 			})
 		})
 		self.nodesByUrl[descriptor.url] = newNode 
 		self._attachNode(newNode)
 	} else if (descriptor.directStream) {
-		stream = descriptor.indirectStream
+		stream = descriptor.directStream
 		newNode = new Node(stream, true, self.id)
 		newNode.getId(function (err, id) {
-			if (!err)
+			if (!err) {
 				self.nodes[id] = newNode
-			cb(err, newNode)
+				newNode.id = id
+			}
+			console.log('connected (dir stream) to node with id:', id)
+			// cb(err, newNode)
 		})
+		self._attachNode(newNode)
 	} else if (descriptor.indirectStream) {
 		stream = descriptor.indirectStream
 		newNode = new Node(stream, false, self.id)
 		self.nodes[descriptor.id] = newNode
+		newNode.id = descriptor.id
+		console.log('connected (ind stream) to node with id:', descriptor.id)
 		self._attachNode(newNode)
 	} else if (descriptor.bridge) {
-		stream = bridge.connectTo(descriptor.id, cb)
+		stream = descriptor.bridge.connectTo(descriptor.id)//, cb)
 		newNode = new Node(stream, false, self.id)
 		self.nodes[descriptor.id] = newNode
+		newNode.id = descriptor.id
+		console.log('connected (bridge) to node with id:', descriptor.id)
 		self._attachNode(newNode)
 	}
 
@@ -313,7 +326,6 @@ DHT.prototype.connect = function (descriptor, cb) {
 
 function compareClosestTo (id) {
 	var idBuf = new Buffer(id, 'hex')
-	nodes = nodes.slice()
 
 	return function (left, right) {
 		var leftBuf = new Buffer(left, 'hex')
@@ -334,7 +346,7 @@ DHT.prototype.getClosest = function (id, nodes) {
 	return nodes.slice(0, N)
 }
 
-DHT.prototype.onFindNode = function (id, cb) {
+DHT.prototype.onFindNode = function (node, id, cb) {
 	var self = this
 
 	var closest = self.getClosest(id, Object.keys(self.nodes))
@@ -342,7 +354,7 @@ DHT.prototype.onFindNode = function (id, cb) {
 	var nodes = closest.map(function (nodeId) {
 		var node = self.nodes[nodeId]
 		var ret = {
-			id: nodeId
+			id: nodeId,
 			direct: node.isDirect
 		}
 		if (node.url)
@@ -350,7 +362,7 @@ DHT.prototype.onFindNode = function (id, cb) {
 		return ret
 	})
 
-	console.log('findNode called on us, result:', closest)
+	// console.log('findNode called on us, result:', nodes)
 
 	cb(null, nodes)
 }
@@ -374,14 +386,22 @@ var SEARCH_K = 8
 DHT.prototype.findNode = function (id, cb) {
 	var self = this
 
+	cb = cb || function (err, res) {
+		if (err) {
+			console.error('find error:', err)
+			return
+		}
+		console.log('found:', res)
+	}
+
 	var closest = Object.keys(self.nodes).map(function (nodeId) {
 		return {
 			id: nodeId,
-			node: self.nodes[id], // either node or origin should be specified
+			node: self.nodes[nodeId], // either node or origin should be specified
 			origin: null,
 			startedQuery: false,
 			finishedQuery: false,
-			direct: self.nodes[id].isDirect
+			direct: self.nodes[nodeId].isDirect
 		}
 	})
 
@@ -400,8 +420,9 @@ DHT.prototype.findNode = function (id, cb) {
 
 	function makeRequests () {
 		var numInProgress = 0
-		for (var i = 0; i < closest.length; i++) {
-			var entry  = closest[i]
+		closest.every(function (entry) {
+			if (entry.id === self.id)
+				return true
 			if (!entry.startedQuery) {
 				entry.startedQuery = true
 				// connect and query
@@ -419,9 +440,9 @@ DHT.prototype.findNode = function (id, cb) {
 						return
 					}
 					// Push results in
-					closerDescriptors.filter(function (closer) {
+					closerDescriptors = closerDescriptors.filter(function (closer) {
 						var closerId = closer.id
-						return !closest.any(function (entry) {
+						return !closest.some(function (entry) {
 							return entry.id === closerId
 						})
 					})
@@ -437,16 +458,15 @@ DHT.prototype.findNode = function (id, cb) {
 							direct: closer.direct
 						}
 					})
-					closest.push(toAdd)
+					Array.prototype.push.apply(closest, toAdd)
 					organizeClosest()
 					makeRequests()
 				})
 			}
 			if (entry.startedQuery && !entry.finishedQuery)
 				numInProgress++
-			if (numInProgress >= ALPHA)
-				break
-		}
+			return numInProgress < ALPHA // continue if we can open more connections
+		})
 		if (numInProgress === 0) {
 			var result = closest.map(function (entry) {
 				return entry.id
@@ -457,16 +477,17 @@ DHT.prototype.findNode = function (id, cb) {
 	makeRequests()
 }
 
-var id //= localStorage.nodeId
-
-if (!id) {
-	id = hat(160)
-	localStorage.nodeId = id
-}
+var id = hat(160)
 
 console.log('my id:', id)
 
-
-var dht = new DHT(id, ['ws://localhost:8080'])
+var dht
+if (typeof window === 'undefined') {
+	dht = new DHT(id, [], 8085)
+}
+else {
+	dht = new DHT(id, ['ws://localhost:8085'])
+	window.dht = dht
+}
 
 
