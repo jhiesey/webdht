@@ -31,7 +31,7 @@ SwitchableStream.prototype.replace = function (newStream) {
 	self._switchingTo = newStream
 
 	if (!self._out) {
-		self._switchWrite(false)
+		self._switchWrite()
 		self._switchRead()
 		return
 	}
@@ -42,13 +42,14 @@ SwitchableStream.prototype.replace = function (newStream) {
 	self._out.push(header)
 
 	if (self._gotReplaceWrite)
-		self._switchWrite(true)
+		self._switchWrite()
 }
 
-SwitchableStream.prototype._switchWrite = function (trueSwitch) {
+SwitchableStream.prototype._switchWrite = function () {
 	var self = this
 
-	if (trueSwitch) {
+	// if actually switching
+	if (self._out) {
 		// send replaceRead
 		var header = new Buffer(1)
 		header.writeUInt8(2)
@@ -56,6 +57,7 @@ SwitchableStream.prototype._switchWrite = function (trueSwitch) {
 	}
 
 	self._out = through2(function (chunk, enc, cb) {
+		// console.log('pushing')
 		self._outFilter(this, chunk, enc, cb)
 	})
 
@@ -63,6 +65,7 @@ SwitchableStream.prototype._switchWrite = function (trueSwitch) {
 	self._switchedDuplex.setReadable(self._out)
 	self._switchedDuplex.pipe(self._switchingTo).pipe(self._switchedDuplex)
 
+	// console.log('changing to new stream')
 	self.setWritable(self._out)
 
 	self._gotReplaceWrite = false
@@ -71,13 +74,17 @@ SwitchableStream.prototype._switchWrite = function (trueSwitch) {
 
 SwitchableStream.prototype._switchRead = function () {
 	var self = this
+	var actuallySwitching = !!self._in
 	self._in = through2(function (chunk, enc, cb) {
 		self._inFilter(this, chunk, enc, cb)
 	})
 
 	self._switchedDuplex.setWritable(self._in)
-
 	self.setReadable(self._in)
+
+	if (actuallySwitching) {
+		self.emit('switched')
+	}
 }
 
 SwitchableStream.prototype._outFilter = function (stream, chunk, enc, cb) {
@@ -98,7 +105,7 @@ SwitchableStream.prototype._inFilter = function (stream, chunk, enc, cb) {
 
 	var buf
 	if (self._inData)
-		buf = Buffer.concat(self._inData, chunk)
+		buf = Buffer.concat([self._inData, chunk])
 	else
 		buf = chunk
 
@@ -131,13 +138,15 @@ SwitchableStream.prototype._inFilter = function (stream, chunk, enc, cb) {
 				buf = buf.slice(1)
 				self._gotReplaceWrite = true
 				if (self._switchingTo)
-					self._switchWrite(true)
+					self._switchWrite()
 				break
 
 			case 2:
-				buf = buf.slice(1)
 				self._switchRead()
-				break
+				// This should always be the last data on this stream
+				self._inData = null
+				cb()
+				return
 			default:
 				cb(new Error('Unexpected message type:', msgType))
 		}

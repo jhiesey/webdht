@@ -36,5 +36,8 @@
     "simple-websocket": "^2.3.4",
     "through2": "^2.0.0",
     "websocket-stream": "^1.5.1"
+  },
+  "devDependencies": {
+    "ashify": "^1.0.1"
   }
 }
