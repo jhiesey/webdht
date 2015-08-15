@@ -27,12 +27,14 @@
   "homepage": "https://github.com/jhiesey/webdht#readme",
   "dependencies": {
     "browserify": "^11.0.1",
+    "duplexify": "^3.4.2",
     "express": "^4.13.3",
     "hat": "0.0.3",
     "inherits": "^2.0.1",
     "rpc-stream": "^2.1.1",
     "simple-peer": "^5.11.4",
     "simple-websocket": "^2.3.4",
+    "through2": "^2.0.0",
     "websocket-stream": "^1.5.1"
   }
 }

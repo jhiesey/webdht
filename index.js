@@ -6,6 +6,7 @@ var rpc = require('rpc-stream')
 var SimplePeer = require('simple-peer')
 var SimpleWebsocket = require('simple-websocket')
 var websocket = require('websocket-stream')
+var SwitchableStream = require('./switchable-stream')
 
 /*
 TODO list:
@@ -84,7 +85,7 @@ var Node = function (stream, isDirect, myId) {
 		self._directConn = self._conn = stream
 	} else {
 		self._directConn = null
-		self._conn = new MovableStream(stream)
+		self._conn = new SwitchableStream(stream)
 	}
 	self._mux = multiplex({
 		chunked: true
@@ -207,6 +208,13 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 			})
 		})
 	}
+
+	bootstrapNodes = bootstrapNodes || []
+	bootstrapNodes.forEach(function (url) {
+		self.connect({
+			url: url
+		})
+	})
 }
 
 DHT.prototype._attachNode = function (id, node) {
