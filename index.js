@@ -9,12 +9,22 @@ var SimpleWebsocket = require('simple-websocket')
 var websocket = require('websocket-stream')
 var SwitchableStream = require('./switchable-stream')
 var multiplex = require('multiplex')
+var pump = require('pump')
 
 /*
 TODO list:
 * handle both sides trying to connect
+* handle both sides trying to switch to direct
 * proper routing table
 * ref counting
+* handle disconnects
+* Nesting depth? at any rate, some way to decide when to connect directly
+
+
+
+limit number of real connections in a bucket (2?)
+	OR: limit total size of routing table pool. size per bucket changes dynamically
+limit number of total connections in a bucket (10?)
 */
 
 /*
@@ -53,6 +63,7 @@ ONCE NODE IS CONSTRUCTED, SHOULD BE CONNECTED!
 var Node = function (stream, isDirect, myId) {
 	var self = this
 	self._myId = myId
+	self._refcount = 1
 
 	var api = {
 		findNode: function (id, cb) {
@@ -103,8 +114,10 @@ var Node = function (stream, isDirect, myId) {
 		self._conn.replace(self._directConn)
 	})
 
+	self._conn.on('close', self.destroy.bind(self)
 	self._conn.on('error', self.emit.bind(self, 'error'))
 
+	// TODO: is this really the right logic?
 	Object.defineProperty(self, 'isDirect', {
 		get: function () {
 			return !!self._directConn
@@ -115,6 +128,29 @@ var Node = function (stream, isDirect, myId) {
 }
 
 inherits(Node, EventEmitter)
+
+// add and remove handlers to 'destroy' to do appropriate cleanup
+Node.prototype.destroy = function () {
+	var self = this
+	if (self._destroyed)
+		return
+
+	self._destroyed = true
+	self._conn.destroy()
+	self.emit('destroy')
+}
+
+Node.prototype.ref = function () {
+	var self = this
+	self._refcount++
+}
+
+Node.prototype.unref = function () {
+	var self = this
+	self._refcount--
+	if (self._refcount <= 0)
+		self.destroy()
+}
 
 Node.prototype.getId = function (cb) {
 	var self = this
@@ -180,7 +216,9 @@ Node.prototype.connectFrom = function (id, stream, cb) {
 	var self = this
 
 	var from = self._mux.createSharedStream('from:' + id)
-	stream.pipe(from).pipe(stream)
+	pump(from, stream, function (err) {
+		// TODO: decrease refcount now that substream died
+	})
 	self._handle.connectFrom(id, cb)
 }
 
@@ -219,6 +257,12 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 			url: url
 		})
 	})
+
+	// TODO: run once bootstrap finished
+	setTimeout(function () {
+		if (Object.keys(self.nodes).length)
+			self.findNode(id)
+	}, 1000)
 }
 
 DHT.prototype._attachNode = function (node) {
@@ -238,11 +282,25 @@ DHT.prototype._attachNode = function (node) {
 		if (self.nodes[id])
 			return cb('Attempt to connect in both directions') // TODO: what should happen?
 
+		// TODO: how do we refcount this?
 		self.connect({
 			id: id,
 			webrtc: true,
 			indirectStream: stream,
 		})
+	})
+}
+
+// MUST set node.id before calling this!
+// don't call node.ref, since the nodes already come with a refcount of 1
+DHT.prototype._storeNode = function (node) {
+	var self = this
+
+	var id = node.id
+	self.nodes[id] = node
+
+	node.on('destroy', function () {
+		delete self.nodes[id]
 	})
 }
 
@@ -284,11 +342,10 @@ DHT.prototype.connect = function (descriptor, cb) {
 		stream.on('connect', function () {
 			newNode.getId(function (err, id) {
 				if (!err) {
-					self.nodes[id] = newNode
 					newNode.id = id
+					self._storeNode(newNode) // TODO: may be duplicate
 				}
 				console.log('connected (url) to node with id:', id)
-				// cb(err, newNode)
 			})
 		})
 		self.nodesByUrl[descriptor.url] = newNode 
@@ -298,25 +355,24 @@ DHT.prototype.connect = function (descriptor, cb) {
 		newNode = new Node(stream, true, self.id)
 		newNode.getId(function (err, id) {
 			if (!err) {
-				self.nodes[id] = newNode
 				newNode.id = id
+				self._storeNode(newNode)
 			}
 			console.log('connected (dir stream) to node with id:', id)
-			// cb(err, newNode)
 		})
 		self._attachNode(newNode)
 	} else if (descriptor.indirectStream) {
 		stream = descriptor.indirectStream
 		newNode = new Node(stream, false, self.id)
-		self.nodes[descriptor.id] = newNode
 		newNode.id = descriptor.id
+		self._storeNode(newNode)
 		console.log('connected (ind stream) to node with id:', descriptor.id)
 		self._attachNode(newNode)
 	} else if (descriptor.bridge) {
-		stream = descriptor.bridge.connectTo(descriptor.id)//, cb)
+		stream = descriptor.bridge.connectTo(descriptor.id)
 		newNode = new Node(stream, false, self.id)
-		self.nodes[descriptor.id] = newNode
 		newNode.id = descriptor.id
+		self._storeNode(newNode)
 		console.log('connected (bridge) to node with id:', descriptor.id)
 		self._attachNode(newNode)
 	}
@@ -395,13 +451,15 @@ DHT.prototype.findNode = function (id, cb) {
 	}
 
 	var closest = Object.keys(self.nodes).map(function (nodeId) {
+		var node = self.nodes[nodeId]
+		node.ref()
 		return {
 			id: nodeId,
-			node: self.nodes[nodeId], // either node or origin should be specified
+			node: node, // either node or origin should be specified
 			origin: null,
 			startedQuery: false,
 			finishedQuery: false,
-			direct: self.nodes[nodeId].isDirect
+			direct: node.isDirect
 		}
 	})
 
@@ -414,7 +472,12 @@ DHT.prototype.findNode = function (id, cb) {
 		closest.sort(function (left, right) {
 			return comparator(left.id, right.id)
 		})
-		closest.slice(0, SEARCH_K)
+		var removed = closest.slice(SEARCH_K)
+		removed.forEach(function (entry) {
+			if (entry.node)
+				entry.node.unref()
+		})
+		closest = closest.slice(0, SEARCH_K)
 	}
 	organizeClosest()
 
@@ -432,6 +495,7 @@ DHT.prototype.findNode = function (id, cb) {
 						id: entry.id,
 						bridge: entry.origin
 					})
+					entry.node.ref()
 				}
 				entry.node.findNode(id, function (err, closerDescriptors) {
 					entry.finishedQuery = true

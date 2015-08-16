@@ -32,6 +32,7 @@
     "hat": "0.0.3",
     "inherits": "^2.0.1",
     "multiplex": "^6.2.2",
+    "pump": "^1.0.0",
     "rpc-stream": "^2.1.1",
     "simple-peer": "^5.11.4",
     "simple-websocket": "^2.3.4",

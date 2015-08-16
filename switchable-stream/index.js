@@ -10,6 +10,7 @@ Add sequence numbers and framing
 
 var duplexify = require('duplexify')
 var inherits = require('inherits')
+var pump = require('pump')
 var through2 = require('through2')
 
 
@@ -63,7 +64,7 @@ SwitchableStream.prototype._switchWrite = function () {
 
 	self._switchedDuplex = duplexify()
 	self._switchedDuplex.setReadable(self._out)
-	self._switchedDuplex.pipe(self._switchingTo).pipe(self._switchedDuplex)
+	pump(self._switchedDuplex, self._switchingTo)
 
 	// console.log('changing to new stream')
 	self.setWritable(self._out)
