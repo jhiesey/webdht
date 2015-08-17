@@ -22,6 +22,11 @@ TODO list:
 
 
 
+Better interface: create a node store!
+
+
+
+
 limit number of real connections in a bucket (2?)
 	OR: limit total size of routing table pool. size per bucket changes dynamically
 limit number of total connections in a bucket (10?)
@@ -55,6 +60,119 @@ gateway can be a peer or bootstrap node
 ONCE NODE IS CONSTRUCTED, SHOULD BE CONNECTED!
 */
 
+var NEIGHBOR_POOL_SIZE = 20
+
+var ID_BITS = 160
+
+var RoutingTable = function (myId) {
+	var self = this
+	self.myId = myId
+
+	self.nodesById = {} // id -> node
+
+	// NOT used for routing:
+	// copied to nodesById when id is set
+	self.nodesByUrl = {} // url -> node
+	// moved to nodesById when id is set
+	self.extraNodes = [] // list of node objects where neither url nor id is known
+}
+
+RoutingTable.prototype.add = function (node) {
+	var self = this
+
+	var putInExtra = true
+	if (node.url) {
+		self.nodesByUrl[node.url] = node
+	}
+
+	if (node.id) {
+		self._onIdKnown(node)
+	} else {
+		if (!node.url)
+			self.extraNodes.push(node)
+
+		node.on('idSet', function () {
+			var idx = self.extraNodes.indexOf(node)
+			if (idx >= 0)
+				self.extraNodes.splice(idx, 1)
+			self._onIdKnown(node)
+		})
+	}
+}
+
+var MAX_CONNECTIONS = 200
+
+var BUCKET_SIZE = 5
+
+// actually add and do all the important stuff
+RoutingTable.prototype._onIdKnown = function (node) {
+	var self = this
+
+	self.nodesById[node.id] = node
+
+	// compute full table
+	var ids = Object.keys(self.nodesById)
+	if (ids.length <= MAX_CONNECTIONS)
+		return
+
+	ids.sort(compareClosestTo(self.myId))
+	var neighbors = ids.slice(0, NEIGHBOR_POOL_SIZE)
+
+	var myBits = new Bitfield(new Buffer(self.myId, 'hex'))
+	// index 0 has highest bit different
+	var buckets = []
+	for (var bit = 0; bit < ID_BITS; bit++) {
+		if (!ids.length)
+			break
+		buckets.push([])
+		// check if the current bucket needs splitting
+		var shouldSplit = ids.length > BUCKET_SIZE
+		while(true) {
+			var id = ids.pop()
+			// check if this bit is different
+			var idBits = new Bitfield(new Buffer(id, 'hex'))
+			if (idBits.get(bit) === myBits.get(bit) && shouldSplit) {
+				ids.push(id)
+				break
+			}
+
+			buckets[bit].push(id)
+		}
+		if (!shouldSplit)
+			break
+	}
+
+	var largestBucket = 0
+	// find if anything needs evicting
+	buckets.each(function (entries, bucket) {
+		if (entries.length > buckets[largestBucket])
+			largestBucket = bucket
+	})
+
+
+}
+
+RoutingTable.prototype._remove = function (node) {
+	var self = this
+
+	if (node.url)
+		delete self.nodesByUrl[node.url]
+	if (node.id)
+		delete self.nodesById[node.id]
+
+	var idx = self.extraNodes.indexOf(node)
+	if (idx >= 0)
+		self.extraNodes.splice(idx, 1)
+}
+
+
+/*
+Nodes should have some support info:
+* refcounts
+* 
+*/
+
+
 //self.connected: boolean
 // connecting is self._conn && !self.connected
 
@@ -63,7 +181,7 @@ ONCE NODE IS CONSTRUCTED, SHOULD BE CONNECTED!
 var Node = function (stream, isDirect, myId) {
 	var self = this
 	self._myId = myId
-	self._refcount = 1
+	// self._refcount = 1
 
 	var api = {
 		findNode: function (id, cb) {
@@ -140,17 +258,17 @@ Node.prototype.destroy = function () {
 	self.emit('destroy')
 }
 
-Node.prototype.ref = function () {
-	var self = this
-	self._refcount++
-}
+// Node.prototype.ref = function () {
+// 	var self = this
+// 	self._refcount++
+// }
 
-Node.prototype.unref = function () {
-	var self = this
-	self._refcount--
-	if (self._refcount <= 0)
-		self.destroy()
-}
+// Node.prototype.unref = function () {
+// 	var self = this
+// 	self._refcount--
+// 	if (self._refcount <= 0)
+// 		self.destroy()
+// }
 
 Node.prototype.getId = function (cb) {
 	var self = this
@@ -452,7 +570,7 @@ DHT.prototype.findNode = function (id, cb) {
 
 	var closest = Object.keys(self.nodes).map(function (nodeId) {
 		var node = self.nodes[nodeId]
-		node.ref()
+		// node.ref()
 		return {
 			id: nodeId,
 			node: node, // either node or origin should be specified
@@ -495,7 +613,7 @@ DHT.prototype.findNode = function (id, cb) {
 						id: entry.id,
 						bridge: entry.origin
 					})
-					entry.node.ref()
+					// entry.node.ref()
 				}
 				entry.node.findNode(id, function (err, closerDescriptors) {
 					entry.finishedQuery = true
@@ -541,7 +659,7 @@ DHT.prototype.findNode = function (id, cb) {
 	makeRequests()
 }
 
-var id = hat(160)
+var id = hat(ID_BITS)
 
 console.log('my id:', id)
 
