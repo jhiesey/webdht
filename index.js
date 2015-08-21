@@ -75,10 +75,14 @@ var RoutingTable = function (myId) {
 	self.nodesByUrl = {} // url -> node
 	// moved to nodesById when id is set
 	self.extraNodes = [] // list of node objects where neither url nor id is known
+
+	self._neighbors = []
 }
 
 RoutingTable.prototype.add = function (node) {
 	var self = this
+
+	node.on('destroy', self._remove.bind(self, node))
 
 	var putInExtra = true
 	if (node.url) {
@@ -91,6 +95,7 @@ RoutingTable.prototype.add = function (node) {
 		if (!node.url)
 			self.extraNodes.push(node)
 
+		// TODO: fire this
 		node.on('idSet', function () {
 			var idx = self.extraNodes.indexOf(node)
 			if (idx >= 0)
@@ -117,6 +122,13 @@ RoutingTable.prototype._onIdKnown = function (node) {
 
 	ids.sort(compareClosestTo(self.myId))
 	var neighbors = ids.slice(0, NEIGHBOR_POOL_SIZE)
+	self._neighbors.forEach(function (id) {
+		self.nodesById[id].active.neighbor = false
+	})
+	self._neigbors = neighbors
+	self._neighbors.forEach(function (id) {
+		self.nodesById[id].active.neighbor = true
+	})
 
 	var myBits = new Bitfield(new Buffer(self.myId, 'hex'))
 	// index 0 has highest bit different
@@ -142,14 +154,22 @@ RoutingTable.prototype._onIdKnown = function (node) {
 			break
 	}
 
-	var largestBucket = 0
-	// find if anything needs evicting
-	buckets.each(function (entries, bucket) {
-		if (entries.length > buckets[largestBucket])
-			largestBucket = bucket
-	})
+	do {
+		// sort largest to smallest
+		buckets.sort(function (left, right) {
+			return right.length - left.length
+		})
 
-
+		var removed = buckets.some(function (bucket) {
+			return bucket.some(function (id) {
+				var active = self.nodesById[id].isActive
+				// TODO: better policy than first found
+				if (!active)
+					self.nodesById[id].destroy()
+				return !active
+			})
+		})
+	} while (removed && ids.length > MAX_CONNECTIONS)
 }
 
 RoutingTable.prototype._remove = function (node) {
@@ -182,6 +202,11 @@ var Node = function (stream, isDirect, myId) {
 	var self = this
 	self._myId = myId
 	// self._refcount = 1
+	self.active = {
+		neighbor: false,
+		substream: 0,
+		current: 0
+	}
 
 	var api = {
 		findNode: function (id, cb) {
@@ -242,6 +267,14 @@ var Node = function (stream, isDirect, myId) {
 		}
 	})
 
+	Object.defineProperty(self, 'isActive', {
+		get: function () {
+			return Object.keys(self.active).all(function (entry) {
+				return !self.active[entry]
+			})
+		}
+	})
+
 	// self.findNode(myId) // TODO: don't always look ourself up
 }
 
@@ -273,7 +306,11 @@ Node.prototype.destroy = function () {
 Node.prototype.getId = function (cb) {
 	var self = this
 
-	self._handle.getId(cb)
+	self._handle.getId(function (err, id) {
+		if (!err)
+			self.emit('idSet')
+		cb(err)
+	})
 }
 
 Node.prototype.connectDirect = function (cb) {
@@ -353,9 +390,10 @@ var N = 8 // number of nodes to get in one fetch
 var DHT = function (id, bootstrapNodes, listenPort) {
 	var self = this
 	self.id = id
-	self.nodes = {}
+	self.routingTable = new RoutingTable(id)
+	// self.nodes = {}
 
-	self.nodesByUrl = {}
+	// self.nodesByUrl = {}
 
 	if (listenPort) {
 		var server = http.createServer()
@@ -378,7 +416,7 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 
 	// TODO: run once bootstrap finished
 	setTimeout(function () {
-		if (Object.keys(self.nodes).length)
+		if (Object.keys(self.routingTable.nodesById).length)
 			self.findNode(id)
 	}, 1000)
 }
@@ -389,7 +427,7 @@ DHT.prototype._attachNode = function (node) {
 	node.on('findNode', self.onFindNode.bind(self))
 
 	node.on('connectTo', function (from, id, stream, cb) {
-		var to = self.nodes[id]
+		var to = self.routingTable.nodesById[id]
 		if (!to)
 			return cb('Unknown node; failed to connect')
 
@@ -397,7 +435,7 @@ DHT.prototype._attachNode = function (node) {
 	})
 
 	node.on('connectFrom', function (from, id, stream, cb) {
-		if (self.nodes[id])
+		if (self.routingTable.nodesById[id])
 			return cb('Attempt to connect in both directions') // TODO: what should happen?
 
 		// TODO: how do we refcount this?
@@ -409,18 +447,18 @@ DHT.prototype._attachNode = function (node) {
 	})
 }
 
-// MUST set node.id before calling this!
-// don't call node.ref, since the nodes already come with a refcount of 1
-DHT.prototype._storeNode = function (node) {
-	var self = this
+// // MUST set node.id before calling this!
+// // don't call node.ref, since the nodes already come with a refcount of 1
+// DHT.prototype._storeNode = function (node) {
+// 	var self = this
 
-	var id = node.id
-	self.nodes[id] = node
+// 	var id = node.id
+// 	self.nodes[id] = node
 
-	node.on('destroy', function () {
-		delete self.nodes[id]
-	})
-}
+// 	node.on('destroy', function () {
+// 		delete self.nodes[id]
+// 	})
+// }
 
 /*
 REAL descriptor (over the wire): {
@@ -443,12 +481,12 @@ socket descriptor: {
 DHT.prototype.connect = function (descriptor, cb) {
 	var self = this
 
-	if (descriptor.id && self.nodes[descriptor.id])
-		console.error('already connected')
+	// if (descriptor.id && self.nodes[descriptor.id])
+	// 	console.error('already connected')
 		// TODO: handle this properly
 
-	if (descriptor.url && self.nodes[descriptor.url])
-		console.error('already connected')
+	// if (descriptor.url && self.nodes[descriptor.url])
+	// 	console.error('already connected')
 		// TODO: handle this properly
 
 	var stream
@@ -457,13 +495,15 @@ DHT.prototype.connect = function (descriptor, cb) {
 		stream = new SimpleWebsocket(descriptor.url)
 		newNode = new Node(stream, true, self.id)
 		newNode.url = descriptor.url
+		// TODO: move this logic to the node itself
 		stream.on('connect', function () {
-			newNode.getId(function (err, id) {
-				if (!err) {
-					newNode.id = id
-					self._storeNode(newNode) // TODO: may be duplicate
+			newNode.getId(function (err) {
+				if (err) {
+					console.error('failed to get id for node with url:', newNode.url)
+					self.newNode.destroy()
+					return
 				}
-				console.log('connected (url) to node with id:', id)
+				console.log('connected (url) to node with id:', newNode.id)
 			})
 		})
 		self.nodesByUrl[descriptor.url] = newNode 
@@ -471,29 +511,29 @@ DHT.prototype.connect = function (descriptor, cb) {
 	} else if (descriptor.directStream) {
 		stream = descriptor.directStream
 		newNode = new Node(stream, true, self.id)
-		newNode.getId(function (err, id) {
-			if (!err) {
-				newNode.id = id
-				self._storeNode(newNode)
+		newNode.getId(function (err) {
+			if (err) {
+				console.error('failed to get id for node with url:', newNode.url)
+				self.newNode.destroy()
+				return
 			}
-			console.log('connected (dir stream) to node with id:', id)
+			console.log('connected (dir stream) to node with id:', newNode.id)
 		})
 		self._attachNode(newNode)
 	} else if (descriptor.indirectStream) {
 		stream = descriptor.indirectStream
 		newNode = new Node(stream, false, self.id)
 		newNode.id = descriptor.id
-		self._storeNode(newNode)
 		console.log('connected (ind stream) to node with id:', descriptor.id)
 		self._attachNode(newNode)
 	} else if (descriptor.bridge) {
 		stream = descriptor.bridge.connectTo(descriptor.id)
 		newNode = new Node(stream, false, self.id)
 		newNode.id = descriptor.id
-		self._storeNode(newNode)
 		console.log('connected (bridge) to node with id:', descriptor.id)
 		self._attachNode(newNode)
 	}
+	self.routingTable.add(newNode)
 
 	return newNode
 }
