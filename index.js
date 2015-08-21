@@ -198,10 +198,26 @@ Nodes should have some support info:
 
 // may not be connected
 // two refcounts: _refcount for any use, _connRefcount for connection
-var Node = function (stream, isDirect, myId) {
+var Node = function (opt, myId) {
 	var self = this
-	self._myId = myId
-	// self._refcount = 1
+	self._myId = opt.myId
+
+	var stream
+	var isDirect = true
+	if (opt.url) {
+		stream = new SimpleWebsocket(descriptor.url)
+		self.url = opt.url
+	} else if (opt.connection) {
+		stream = opt.connection
+		isDirect = !!opt.isDirect
+	} else if (opt.relay && opt.id) {
+		self.relay = opt.relay
+		stream = self.relay.connectTo(opt.id)
+		isDirect = false
+	} else {
+		throw new Error('Not enough information to construct node')
+	}
+
 	self.active = {
 		neighbor: false,
 		substream: 0,
@@ -233,7 +249,7 @@ var Node = function (stream, isDirect, myId) {
 			cb(null)
 		},
 		getId: function (cb) {
-			cb(null, myId)
+			cb(null, self._myId)
 		}
 	}
 
@@ -275,7 +291,18 @@ var Node = function (stream, isDirect, myId) {
 		}
 	})
 
-	// self.findNode(myId) // TODO: don't always look ourself up
+	if (opt.id) {
+		self.id = opt.id
+		process.nextTick(self.emit.bind(self, 'idSet'))
+	} else {
+		self._handle.getId(function (err, id) {
+		if (err) {
+			console.error('failed to get id for node!')
+			self.destroy()
+			return
+		}
+		self.emit('idSet')
+	})
 }
 
 inherits(Node, EventEmitter)
@@ -303,15 +330,15 @@ Node.prototype.destroy = function () {
 // 		self.destroy()
 // }
 
-Node.prototype.getId = function (cb) {
-	var self = this
+// Node.prototype._getId = function (cb) {
+// 	var self = this
 
-	self._handle.getId(function (err, id) {
-		if (!err)
-			self.emit('idSet')
-		cb(err)
-	})
-}
+// 	self._handle.getId(function (err, id) {
+// 		if (!err)
+// 			self.emit('idSet')
+// 		cb(err)
+// 	})
+// }
 
 Node.prototype.connectDirect = function (cb) {
 	var self = this
@@ -401,7 +428,8 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 			server: server
 		}, function (stream) {
 			self.connect({
-				directStream: stream
+				connection: stream,
+				isDirect: true
 			})
 		})
 		server.listen(listenPort)
@@ -441,8 +469,8 @@ DHT.prototype._attachNode = function (node) {
 		// TODO: how do we refcount this?
 		self.connect({
 			id: id,
-			webrtc: true,
-			indirectStream: stream,
+			connection: stream,
+			isDirect: false
 		})
 	})
 }
@@ -478,7 +506,7 @@ socket descriptor: {
 }
 */
 
-DHT.prototype.connect = function (descriptor, cb) {
+DHT.prototype.connect = function (opt) {
 	var self = this
 
 	// if (descriptor.id && self.nodes[descriptor.id])
@@ -489,53 +517,12 @@ DHT.prototype.connect = function (descriptor, cb) {
 	// 	console.error('already connected')
 		// TODO: handle this properly
 
-	var stream
-	var newNode
-	if (descriptor.url) {
-		stream = new SimpleWebsocket(descriptor.url)
-		newNode = new Node(stream, true, self.id)
-		newNode.url = descriptor.url
-		// TODO: move this logic to the node itself
-		stream.on('connect', function () {
-			newNode.getId(function (err) {
-				if (err) {
-					console.error('failed to get id for node with url:', newNode.url)
-					self.newNode.destroy()
-					return
-				}
-				console.log('connected (url) to node with id:', newNode.id)
-			})
-		})
-		self.nodesByUrl[descriptor.url] = newNode 
-		self._attachNode(newNode)
-	} else if (descriptor.directStream) {
-		stream = descriptor.directStream
-		newNode = new Node(stream, true, self.id)
-		newNode.getId(function (err) {
-			if (err) {
-				console.error('failed to get id for node with url:', newNode.url)
-				self.newNode.destroy()
-				return
-			}
-			console.log('connected (dir stream) to node with id:', newNode.id)
-		})
-		self._attachNode(newNode)
-	} else if (descriptor.indirectStream) {
-		stream = descriptor.indirectStream
-		newNode = new Node(stream, false, self.id)
-		newNode.id = descriptor.id
-		console.log('connected (ind stream) to node with id:', descriptor.id)
-		self._attachNode(newNode)
-	} else if (descriptor.bridge) {
-		stream = descriptor.bridge.connectTo(descriptor.id)
-		newNode = new Node(stream, false, self.id)
-		newNode.id = descriptor.id
-		console.log('connected (bridge) to node with id:', descriptor.id)
-		self._attachNode(newNode)
-	}
-	self.routingTable.add(newNode)
+	var node = new Node(opt, myId)
 
-	return newNode
+	self._attachNode(node)
+	self.routingTable.add(node)
+
+	return node
 }
 
 function compareClosestTo (id) {
@@ -651,7 +638,7 @@ DHT.prototype.findNode = function (id, cb) {
 					entry.node = self.connect({
 						url: entry.url,
 						id: entry.id,
-						bridge: entry.origin
+						relay: entry.origin
 					})
 					// entry.node.ref()
 				}
