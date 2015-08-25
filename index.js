@@ -16,10 +16,11 @@ TODO list:
 CHECK handle both sides trying to connect
 CHECK handle both sides trying to switch to direct
 CHECK proper routing table
-* ref counting
-* handle disconnects
-* Nesting depth? at any rate, some way to decide when to connect directly
+CHECK ref counting
+CHECK handle disconnects (all structure except self._allNodes is transient)
+CHECK Nesting depth? at any rate, some way to decide when to connect directly
 
+* Counting in-progress requests!!!!
 
 
 Better interface: create a node store!
@@ -95,7 +96,6 @@ RoutingTable.prototype.add = function (node) {
 		if (!node.url)
 			self.extraNodes.push(node)
 
-		// TODO: fire this
 		node.on('idSet', function () {
 			var idx = self.extraNodes.indexOf(node)
 			if (idx >= 0)
@@ -206,6 +206,7 @@ Simultaneity problems:
 
 var Node = function (opt, myId) {
 	var self = this
+	self.id = null // may be set right after constructor, but not necessarily
 	self._myId = opt.myId
 
 	var stream
@@ -235,11 +236,13 @@ var Node = function (opt, myId) {
 			self.emit('findNode', self, id, cb)
 		},
 		connectTo: function (id, cb) {
-			var subStream = self._mux.createSharedStream('to:' + id)
+			var subStream = self._mux.createStream('to:' + id)
+			self._refSubstream(substream) // TODO: this may be bad for us if the neighbors are greedy
 			self.emit('connectTo', self, id, subStream, cb)
 		},
 		connectFrom: function (id, cb) {
-			var subStream = self._mux.createSharedStream('from:' + id)
+			var subStream = self._mux.createStream('from:' + id)
+			self._refSubstream(substream) // TODO: this may be bad for us if the neighbors are greedy
 			self.emit('connectFrom', self, id, subStream, cb)
 		},
 		iceCandidate: function (initiator, data, cb) {
@@ -274,6 +277,16 @@ var Node = function (opt, myId) {
 	self._conn = new SwitchableStream(stream)
 	self._mux = multiplex({
 		chunked: true
+	}, function (appStream, name) {
+		if (name.slice(0, 4) === 'app:') {
+			var emitStream = function () {
+				self.emit('appStream', self.id, appStream, name.slice(4)
+			}
+			if (!self.id)
+				self.on('idSet', emitStream)
+			else
+				emitStream()
+		}
 	})
 	self._conn.pipe(self._mux).pipe(self._conn)
 	var rpcStream = self._mux.createSharedStream('rpc')
@@ -339,8 +352,8 @@ var Node = function (opt, myId) {
 	}
 
 	self.on('idSet') {
-		if (self.depth > MAX_NESTING_DEPTH)
-			self.connectDirect() // TODO: won't this frequently be racy?
+		if (self.depth > MAX_NESTING_DEPTH && !self._directConn)
+			self.connectDirect()
 	}
 }
 
@@ -357,16 +370,36 @@ Node.prototype.destroy = function () {
 	self.emit('destroy')
 }
 
-Node.prototype.connectDirect = function (cb) {
+Node.prototype.connectDirect = function () {
+	var self = this
+	self._setupDirectConn(true)
+}
+
+// Can only call once per stream. returns unref function.
+Node.prototype._refSubstream = function (stream) {
 	var self = this
 
-	if (cb)
-		self.once('direct', cb)
+	var unrefed = false
+	var unref = function () {
+		if (unrefed)
+			return
+		unrefed = true
+		self.active--
+	}
 
-	if (self._directConn)
-		return // TODO: call cb?
+	// auto-unref
+	stream.on('error', unref)
+	stream.on('end', unref)
+	return unref
+}
 
-	self._setupDirectConn(true)
+Node.prototype.createAppStream = function (name) {
+	var self = this
+
+	var stream = self._mux.createStream('app:' + name)
+	self._refSubstream(stream)
+
+	return stream
 }
 
 Node.prototype.replaceStream = function (newStream) {
@@ -391,7 +424,8 @@ Node.prototype._setupDirectConn = function (initiator) {
 	self._directConn.on('signal', function (data) {
 		self._handle.iceCandidate(initiator, data, function (err) {
 			if (err) {
-				console.error('error in ice candidate:', err) // TODO: error handling
+				console.error('error in ice candidate:', err)
+				self.destroy() // TODO: is there something better we can do?
 			}
 		})
 	})
@@ -404,19 +438,16 @@ Node.prototype.findNode = function (id, cb) {
 	self._handle.findNode(id, cb)
 }
 
-// returns stream AND puts it in the callback
 Node.prototype.connectTo = function (id) {
 	var self = this
 
-	var stream = self._mux.createSharedStream('to:' + id)
+	var stream = self._mux.receiveStream('to:' + id)
+	var unref = self._refSubstream(stream)
 	self._handle.connectTo(id, function (err, connected) {
 		if (err) {
+			unref()
 			console.error('error in connectTo:', err)
-			return
 		}
-			// return cb(err)
-
-		// cb(null, stream)
 	})
 
 	return stream
@@ -425,9 +456,13 @@ Node.prototype.connectTo = function (id) {
 Node.prototype.connectFrom = function (id, stream, cb) {
 	var self = this
 
-	var from = self._mux.createSharedStream('from:' + id)
+	var from = self._mux.receiveStream('from:' + id)
+	var unref = self._refSubstream(from)
 	pump(from, stream, function (err) {
-		// TODO: decrease refcount now that substream died
+		if (err) {
+			unref()
+			console.error('error in connectFrom:', err)
+		}
 	})
 	self._handle.connectFrom(id, cb)
 }
@@ -469,6 +504,25 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 	}, 1000)
 }
 
+DHT.prototype.sendStream = function (id, name, cb) {
+	var self = this
+
+	var node = self._allNodes[id] 
+	if (!node) {
+		self.findNode(id, function (err, closest) {
+			if (err) {
+				return cb(err) 
+			}
+			if (!closest.length || closest[0].node.id !== id)
+				return cb(new Error('Unable to find node with id:', id))
+			node = closest[0].node
+
+			node.connectDirect()
+			cb(null, node.createAppStream(name))
+		})
+	}
+}
+
 DHT.prototype._attachNode = function (node) {
 	var self = this
 
@@ -502,6 +556,10 @@ DHT.prototype._attachNode = function (node) {
 		})
 		cb(null, true)
 	})
+
+	node.on('appStream', function (id, name, appStream) {
+		self.emit('stream', id, name, appStream)
+	})
 }
 
 /*
@@ -514,14 +572,6 @@ REAL descriptor (over the wire): {
 
 DHT.prototype.connect = function (opt) {
 	var self = this
-
-	// if (descriptor.id && self.nodes[descriptor.id])
-	// 	console.error('already connected')
-		// TODO: handle this properly
-
-	// if (descriptor.url && self.nodes[descriptor.url])
-	// 	console.error('already connected')
-		// TODO: handle this properly
 
 	var node = new Node(opt, myId)
 
@@ -682,7 +732,7 @@ DHT.prototype.findNode = function (id, cb) {
 		})
 		if (numInProgress === 0) {
 			var result = closest.map(function (entry) {
-				return entry.id
+				return entry.node
 			})
 			cb(null, result)
 		}
