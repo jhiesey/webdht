@@ -13,9 +13,9 @@ var pump = require('pump')
 
 /*
 TODO list:
-* handle both sides trying to connect
-* handle both sides trying to switch to direct
-* proper routing table
+CHECK handle both sides trying to connect
+CHECK handle both sides trying to switch to direct
+CHECK proper routing table
 * ref counting
 * handle disconnects
 * Nesting depth? at any rate, some way to decide when to connect directly
@@ -185,19 +185,25 @@ RoutingTable.prototype._remove = function (node) {
 		self.extraNodes.splice(idx, 1)
 }
 
+var MAX_NESTING_DEPTH = 2
 
 /*
-Nodes should have some support info:
-* refcounts
-* 
+Simultaneity problems:
+	* Both try to connect simultaneously
+		* Two indirect streams
+		* one direct and one indirect stream
+		* two direct streams (weird, but if both are servers could happen)
+
+		In all 
+
+
+		* if ids are known, higher id wins
+		* if not known, wait. still higher id wins
+		WAIT: what happens with things with a reference to the old node???
+	* Both try to upgrade simultaneously -> internal to node
+		* higher id wins
 */
 
-
-//self.connected: boolean
-// connecting is self._conn && !self.connected
-
-// may not be connected
-// two refcounts: _refcount for any use, _connRefcount for connection
 var Node = function (opt, myId) {
 	var self = this
 	self._myId = opt.myId
@@ -207,13 +213,13 @@ var Node = function (opt, myId) {
 	if (opt.url) {
 		stream = new SimpleWebsocket(descriptor.url)
 		self.url = opt.url
+		self.relay = null
 	} else if (opt.connection) {
 		stream = opt.connection
-		isDirect = !!opt.isDirect
+		self.relay = opt.relay || null // may be direct or indirect
 	} else if (opt.relay && opt.id) {
-		self.relay = opt.relay
 		stream = self.relay.connectTo(opt.id)
-		isDirect = false
+		self.relay = opt.relay
 	} else {
 		throw new Error('Not enough information to construct node')
 	}
@@ -237,13 +243,20 @@ var Node = function (opt, myId) {
 			self.emit('connectFrom', self, id, subStream, cb)
 		},
 		iceCandidate: function (initiator, data, cb) {
+			// Here be dragons! the logic here is much more complex than meets the eye. If initiator && self._rpcInitiator,
+			// we need to replace the stream. this will set self._rpcInitiator false, so it won't run again
 			if (!self._directConn && !initiator) //
 				return cb(new Error('Neither side is initiating connection'))
 			else if (!self._directConn)
 				self._setupDirectConn(false)
-
-			if (initiator && self._rpcIinitator)
-				return // TODO: both sides are trying to connect
+			else if (initiator && self._rpcInitiator) {
+				// we will never initiate before the id is known, so self.id must be set
+				// Ignore if our id is higher than theirs (our outgoing connection will win)
+				if ((new Buffer(self.id, 'hex')).compare(new Buffer(self._myId, 'hex')) < 0)
+					return
+				else // Replace if our id is lower than theirs (our outgoing connection will fail)
+					self._setupDirectConn(false)
+			}
 
 			self._directConn.signal(data)
 			cb(null)
@@ -253,12 +266,12 @@ var Node = function (opt, myId) {
 		}
 	}
 
-	if (isDirect) {
-		self._directConn = self._conn = stream
+	if (!self.relay) {
+		self._directConn = stream
 	} else {
 		self._directConn = null
-		self._conn = new SwitchableStream(stream)
 	}
+	self._conn = new SwitchableStream(stream)
 	self._mux = multiplex({
 		chunked: true
 	})
@@ -270,7 +283,8 @@ var Node = function (opt, myId) {
 	rpcStream.pipe(rpcInstance).pipe(rpcStream)
 
 	self.on('direct', function () {
-		self._conn.replace(self._directConn)
+		self.replaceStream(self._directConn)
+		self.relay = null
 	})
 
 	self._conn.on('close', self.destroy.bind(self)
@@ -278,6 +292,12 @@ var Node = function (opt, myId) {
 
 	// TODO: is this really the right logic?
 	Object.defineProperty(self, 'isDirect', {
+		get: function () {
+			return !self.relay
+		}
+	})
+
+	Object.defineProperty(self, 'tryingDirect', {
 		get: function () {
 			return !!self._directConn
 		}
@@ -291,18 +311,37 @@ var Node = function (opt, myId) {
 		}
 	})
 
+	// TODO: should depth be measured by current or planned depth?
+	Object.defineProperty(self. 'depth', {
+		get: function () {
+			var depth = 0
+			node = self
+			while (!node._directConn) {
+				node = node.relay
+				depth++
+			}
+			return depth
+		}
+	})
+
 	if (opt.id) {
 		self.id = opt.id
 		process.nextTick(self.emit.bind(self, 'idSet'))
 	} else {
 		self._handle.getId(function (err, id) {
-		if (err) {
-			console.error('failed to get id for node!')
-			self.destroy()
-			return
-		}
-		self.emit('idSet')
-	})
+			if (err) {
+				console.error('failed to get id for node!')
+				self.destroy()
+				return
+			}
+			self.emit('idSet')
+		})
+	}
+
+	self.on('idSet') {
+		if (self.depth > MAX_NESTING_DEPTH)
+			self.connectDirect() // TODO: won't this frequently be racy?
+	}
 }
 
 inherits(Node, EventEmitter)
@@ -318,28 +357,6 @@ Node.prototype.destroy = function () {
 	self.emit('destroy')
 }
 
-// Node.prototype.ref = function () {
-// 	var self = this
-// 	self._refcount++
-// }
-
-// Node.prototype.unref = function () {
-// 	var self = this
-// 	self._refcount--
-// 	if (self._refcount <= 0)
-// 		self.destroy()
-// }
-
-// Node.prototype._getId = function (cb) {
-// 	var self = this
-
-// 	self._handle.getId(function (err, id) {
-// 		if (!err)
-// 			self.emit('idSet')
-// 		cb(err)
-// 	})
-// }
-
 Node.prototype.connectDirect = function (cb) {
 	var self = this
 
@@ -352,10 +369,21 @@ Node.prototype.connectDirect = function (cb) {
 	self._setupDirectConn(true)
 }
 
+Node.prototype.replaceStream = function (newStream) {
+	var self = this
+	self._conn.replace(newStream)
+}
+
 Node.prototype._setupDirectConn = function (initiator) {
 	var self = this
 
-	self._rpcIinitator = initiator
+	self._emitDirect = self._emitDirect || self.emit.bind(self, 'direct')
+
+	// This handles cleaning up if we're replacing another direct connection
+	if (self._directConn)
+		self._directConn.removeListener('connect', emitDirect)
+
+	self._rpcInitiator = initiator
 	self._directConn = new SimplePeer({
 		initiator: initiator
 	})
@@ -367,9 +395,7 @@ Node.prototype._setupDirectConn = function (initiator) {
 			}
 		})
 	})
-	self._directConn.on('connect', function () {
-		self.emit('direct')
-	})
+	self._directConn.on('connect', emitDirect)
 }
 
 Node.prototype.findNode = function (id, cb) {
@@ -383,9 +409,11 @@ Node.prototype.connectTo = function (id) {
 	var self = this
 
 	var stream = self._mux.createSharedStream('to:' + id)
-	self._handle.connectTo(id, function (err) {
-		if (err)
+	self._handle.connectTo(id, function (err, connected) {
+		if (err) {
 			console.error('error in connectTo:', err)
+			return
+		}
 			// return cb(err)
 
 		// cb(null, stream)
@@ -403,14 +431,6 @@ Node.prototype.connectFrom = function (id, stream, cb) {
 	})
 	self._handle.connectFrom(id, cb)
 }
-
-// SocketNode = function (url, myId) {
-// 	var self = this
-// 	self.url = url
-// 	self.myId = myId
-
-
-// }
 
 var N = 8 // number of nodes to get in one fetch
 
@@ -463,30 +483,26 @@ DHT.prototype._attachNode = function (node) {
 	})
 
 	node.on('connectFrom', function (from, id, stream, cb) {
-		if (self.routingTable.nodesById[id])
-			return cb('Attempt to connect in both directions') // TODO: what should happen?
+		// We already have a node!
+		var existingNode = self.routingTable.nodesById[id]
+		if (existingNode) {
+			// Ignore if our id is higher than theirs (our outgoing connection will win)
+			if ((new Buffer(id, 'hex')).compare(new Buffer(self.id, 'hex')) < 0)
+				return cb(null, false)
 
-		// TODO: how do we refcount this?
+			// Replace if our id is lower than theirs (our outgoing connection will fail)
+			existingNode.replaceStream(stream)
+			return cb(null, true)
+		}
+
 		self.connect({
 			id: id,
 			connection: stream,
-			isDirect: false
+			relay: node
 		})
+		cb(null, true)
 	})
 }
-
-// // MUST set node.id before calling this!
-// // don't call node.ref, since the nodes already come with a refcount of 1
-// DHT.prototype._storeNode = function (node) {
-// 	var self = this
-
-// 	var id = node.id
-// 	self.nodes[id] = node
-
-// 	node.on('destroy', function () {
-// 		delete self.nodes[id]
-// 	})
-// }
 
 /*
 REAL descriptor (over the wire): {
@@ -494,16 +510,6 @@ REAL descriptor (over the wire): {
 	id: '1234abcd'
 }
 
-*/
-
-/*
-socket descriptor: {
-	url: 'wss://foo.bar', // optional
-	id: '1234abcd', // optional, required if webrtc is specified
-	bridge: Node // optional; one of stream or bridge must be provided if webrtc and !url
-	indirectStream: DuplexStream // optional; one of stream or bridge must be provided if webrtc and !url
-	directStream: DuplexStream // optional; provided for websocket server case
-}
 */
 
 DHT.prototype.connect = function (opt) {
@@ -603,8 +609,7 @@ DHT.prototype.findNode = function (id, cb) {
 			node: node, // either node or origin should be specified
 			origin: null,
 			startedQuery: false,
-			finishedQuery: false,
-			direct: node.isDirect
+			finishedQuery: false
 		}
 	})
 
@@ -640,7 +645,6 @@ DHT.prototype.findNode = function (id, cb) {
 						id: entry.id,
 						relay: entry.origin
 					})
-					// entry.node.ref()
 				}
 				entry.node.findNode(id, function (err, closerDescriptors) {
 					entry.finishedQuery = true
@@ -698,5 +702,3 @@ else {
 	dht = new DHT(id, ['ws://localhost:8085'])
 	window.dht = dht
 }
-
-
