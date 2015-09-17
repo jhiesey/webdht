@@ -3,6 +3,7 @@ var EventEmitter = require('events').EventEmitter
 var hat = require('hat')
 var http = require('http')
 var inherits = require('inherits')
+var once = require('once')
 var rpc = require('rpc-stream')
 var SimplePeer = require('simple-peer')
 var SimpleWebsocket = require('simple-websocket')
@@ -85,7 +86,6 @@ RoutingTable.prototype.add = function (node) {
 
 	node.on('destroy', self._remove.bind(self, node))
 
-	var putInExtra = true
 	if (node.url) {
 		self.nodesByUrl[node.url] = node
 	}
@@ -113,6 +113,7 @@ var BUCKET_SIZE = 5
 RoutingTable.prototype._onIdKnown = function (node) {
 	var self = this
 
+	console.log('connected to node:', node.id)
 	self.nodesById[node.id] = node
 
 	// compute full table
@@ -207,28 +208,27 @@ Simultaneity problems:
 var Node = function (opt, myId) {
 	var self = this
 	self.id = null // may be set right after constructor, but not necessarily
-	self._myId = opt.myId
+	self._myId = myId
 
 	var stream
-	var isDirect = true
+	// var isDirect = true
 	if (opt.url) {
-		stream = new SimpleWebsocket(descriptor.url)
+		stream = new SimpleWebsocket(opt.url)
 		self.url = opt.url
 		self.relay = null
 	} else if (opt.connection) {
 		stream = opt.connection
 		self.relay = opt.relay || null // may be direct or indirect
 	} else if (opt.relay && opt.id) {
-		stream = self.relay.connectTo(opt.id)
 		self.relay = opt.relay
+		stream = self.relay.connectTo(opt.id)
 	} else {
 		throw new Error('Not enough information to construct node')
 	}
 
 	self.active = {
 		neighbor: false,
-		substream: 0,
-		current: 0
+		substream: 0
 	}
 
 	var api = {
@@ -236,14 +236,14 @@ var Node = function (opt, myId) {
 			self.emit('findNode', self, id, cb)
 		},
 		connectTo: function (id, cb) {
-			var subStream = self._mux.createStream('to:' + id)
+			var substream = self._mux.createStream('to:' + id)
 			self._refSubstream(substream) // TODO: this may be bad for us if the neighbors are greedy
-			self.emit('connectTo', self, id, subStream, cb)
+			self.emit('connectTo', self, id, substream, cb)
 		},
 		connectFrom: function (id, cb) {
-			var subStream = self._mux.createStream('from:' + id)
+			var substream = self._mux.createStream('from:' + id)
 			self._refSubstream(substream) // TODO: this may be bad for us if the neighbors are greedy
-			self.emit('connectFrom', self, id, subStream, cb)
+			self.emit('connectFrom', self, id, substream, cb)
 		},
 		iceCandidate: function (initiator, data, cb) {
 			// Here be dragons! the logic here is much more complex than meets the eye. If initiator && self._rpcInitiator,
@@ -280,7 +280,7 @@ var Node = function (opt, myId) {
 	}, function (appStream, name) {
 		if (name.slice(0, 4) === 'app:') {
 			var emitStream = function () {
-				self.emit('appStream', self.id, appStream, name.slice(4)
+				self.emit('appStream', self.id, appStream, name.slice(4))
 			}
 			if (!self.id)
 				self.on('idSet', emitStream)
@@ -300,7 +300,7 @@ var Node = function (opt, myId) {
 		self.relay = null
 	})
 
-	self._conn.on('close', self.destroy.bind(self)
+	self._conn.on('close', self.destroy.bind(self))
 	self._conn.on('error', self.emit.bind(self, 'error'))
 
 	// TODO: is this really the right logic?
@@ -325,7 +325,7 @@ var Node = function (opt, myId) {
 	})
 
 	// TODO: should depth be measured by current or planned depth?
-	Object.defineProperty(self. 'depth', {
+	Object.defineProperty(self, 'depth', {
 		get: function () {
 			var depth = 0
 			node = self
@@ -347,14 +347,15 @@ var Node = function (opt, myId) {
 				self.destroy()
 				return
 			}
+			self.id = id
 			self.emit('idSet')
 		})
 	}
 
-	self.on('idSet') {
-		if (self.depth > MAX_NESTING_DEPTH && !self._directConn)
+	self.on('idSet', function () {
+		if (self.depth > MAX_NESTING_DEPTH)
 			self.connectDirect()
-	}
+	})
 }
 
 inherits(Node, EventEmitter)
@@ -372,6 +373,9 @@ Node.prototype.destroy = function () {
 
 Node.prototype.connectDirect = function () {
 	var self = this
+	if (self._directConn)
+		return
+
 	self._setupDirectConn(true)
 }
 
@@ -384,7 +388,7 @@ Node.prototype._refSubstream = function (stream) {
 		if (unrefed)
 			return
 		unrefed = true
-		self.active--
+		self.active.substream--
 	}
 
 	// auto-unref
@@ -432,16 +436,29 @@ Node.prototype._setupDirectConn = function (initiator) {
 	self._directConn.on('connect', emitDirect)
 }
 
+var LOOKUP_TIMEOUT = 10
+
 Node.prototype.findNode = function (id, cb) {
 	var self = this
 
-	self._handle.findNode(id, cb)
+	cb = once(cb)
+	var timeout = setTimeout(function () {
+		cb(new Error('timeout'))
+	}, LOOKUP_TIMEOUT * 1000)
+
+	self._handle.findNode(id, function (err, descriptors) {
+		clearTimeout(timeout)
+		cb(err, descriptors)
+	})
 }
 
 Node.prototype.connectTo = function (id) {
 	var self = this
 
 	var stream = self._mux.receiveStream('to:' + id)
+	// stream.on('open', function () {
+	// 	console.log('substream open')
+	// })
 	var unref = self._refSubstream(stream)
 	self._handle.connectTo(id, function (err, connected) {
 		if (err) {
@@ -458,7 +475,7 @@ Node.prototype.connectFrom = function (id, stream, cb) {
 
 	var from = self._mux.receiveStream('from:' + id)
 	var unref = self._refSubstream(from)
-	pump(from, stream, function (err) {
+	pump(from, stream, from, function (err) {
 		if (err) {
 			unref()
 			console.error('error in connectFrom:', err)
@@ -484,24 +501,25 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 		}, function (stream) {
 			self.connect({
 				connection: stream,
-				isDirect: true
 			})
 		})
 		server.listen(listenPort)
 	}
 
 	bootstrapNodes = bootstrapNodes || []
+	var bootstrapped = 0
 	bootstrapNodes.forEach(function (url) {
-		self.connect({
+		var node = self.connect({
 			url: url
 		})
+		node.on('idSet', function () {
+			bootstrapped++
+			// Half or more
+			if (bootstrapped >= bootstrapNodes.length - bootstrapped)
+				// TODO: this won't get enough to fill the neighbor table
+				self.findNode(id)
+		})
 	})
-
-	// TODO: run once bootstrap finished
-	setTimeout(function () {
-		if (Object.keys(self.routingTable.nodesById).length)
-			self.findNode(id)
-	}, 1000)
 }
 
 DHT.prototype.sendStream = function (id, name, cb) {
@@ -529,6 +547,10 @@ DHT.prototype._attachNode = function (node) {
 	node.on('findNode', self.onFindNode.bind(self))
 
 	node.on('connectTo', function (from, id, stream, cb) {
+		// console.log('got connectTo')
+		// stream.on('data', function (buf) {
+		// 	console.log(buf.toString())
+		// })
 		var to = self.routingTable.nodesById[id]
 		if (!to)
 			return cb('Unknown node; failed to connect')
@@ -538,6 +560,10 @@ DHT.prototype._attachNode = function (node) {
 
 	node.on('connectFrom', function (from, id, stream, cb) {
 		// We already have a node!
+		// console.log('got connectFrom')
+		// stream.on('data', function (buf) {
+		// 	console.log(buf.toString())
+		// })
 		var existingNode = self.routingTable.nodesById[id]
 		if (existingNode) {
 			// Ignore if our id is higher than theirs (our outgoing connection will win)
@@ -573,7 +599,7 @@ REAL descriptor (over the wire): {
 DHT.prototype.connect = function (opt) {
 	var self = this
 
-	var node = new Node(opt, myId)
+	var node = new Node(opt, self.id)
 
 	self._attachNode(node)
 	self.routingTable.add(node)
@@ -606,13 +632,13 @@ DHT.prototype.getClosest = function (id, nodes) {
 DHT.prototype.onFindNode = function (node, id, cb) {
 	var self = this
 
-	var closest = self.getClosest(id, Object.keys(self.nodes))
+	var closest = self.getClosest(id, Object.keys(self.routingTable.nodesById))
 
 	var nodes = closest.map(function (nodeId) {
-		var node = self.nodes[nodeId]
+		var node = self.routingTable.nodesById[nodeId]
 		var ret = {
 			id: nodeId,
-			direct: node.isDirect
+			url: node.url || null
 		}
 		if (node.url)
 			ret.url = node.url
@@ -651,16 +677,26 @@ DHT.prototype.findNode = function (id, cb) {
 		console.log('found:', res)
 	}
 
-	var closest = Object.keys(self.nodes).map(function (nodeId) {
-		var node = self.nodes[nodeId]
+	var closest = Object.keys(self.routingTable.nodesById).map(function (nodeId) {
+		var node = self.routingTable.nodesById[nodeId]
 		// node.ref()
 		return {
 			id: nodeId,
-			node: node, // either node or origin should be specified
-			origin: null,
+			node: node, // either node or relay should be specified
+			relay: null,
 			startedQuery: false,
 			finishedQuery: false
 		}
+	})
+	// insert ourself
+	closest.push({
+		id: self.id,
+		node: { // fake self node
+			id: self.id
+		},
+		relay: null,
+		startedQuery: true,
+		finishedQuery: true
 	})
 
 	if (closest.length === 0)
@@ -693,13 +729,18 @@ DHT.prototype.findNode = function (id, cb) {
 					entry.node = self.connect({
 						url: entry.url,
 						id: entry.id,
-						relay: entry.origin
+						relay: entry.relay
 					})
 				}
 				entry.node.findNode(id, function (err, closerDescriptors) {
 					entry.finishedQuery = true
 					if (err) {
 						console.error('error querying node:', entry.id)
+						// remove failed node
+						var idx = closest.indexOf(entry)
+						if (idx >= 0)
+							closest.splice(idx, 1)
+						makeRequests()
 						return
 					}
 					// Push results in
@@ -714,11 +755,10 @@ DHT.prototype.findNode = function (id, cb) {
 						return {
 							id: closerId,
 							node: null, // Duplicates will have been filtered by now
-							origin: entry.node,
+							relay: entry.node,
 							startedQuery: false,
 							finishedQuery: false,
-							url: closer.url,
-							direct: closer.direct
+							url: closer.url
 						}
 					})
 					Array.prototype.push.apply(closest, toAdd)
