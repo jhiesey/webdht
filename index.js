@@ -466,9 +466,6 @@ Node.prototype.connectTo = function (id) {
 	var self = this
 
 	var stream = self._mux.receiveStream('to:' + id)
-	// stream.on('open', function () {
-	// 	console.log('substream open')
-	// })
 	var unref = self._refSubstream(stream)
 	self._handle.connectTo(id, function (err, connected) {
 		if (err) {
@@ -557,10 +554,6 @@ DHT.prototype._attachNode = function (node) {
 	node.on('findNode', self.onFindNode.bind(self))
 
 	node.on('connectTo', function (from, id, stream, cb) {
-		// console.log('got connectTo')
-		// stream.on('data', function (buf) {
-		// 	console.log(buf.toString())
-		// })
 		var to = self.routingTable.nodesById[id]
 		if (!to)
 			return cb('Unknown node; failed to connect')
@@ -570,10 +563,6 @@ DHT.prototype._attachNode = function (node) {
 
 	node.on('connectFrom', function (from, id, stream, cb) {
 		// We already have a node!
-		// console.log('got connectFrom')
-		// stream.on('data', function (buf) {
-		// 	console.log(buf.toString())
-		// })
 		var existingNode = self.routingTable.nodesById[id]
 		if (existingNode) {
 			// Ignore if our id is higher than theirs (our outgoing connection will win)
@@ -654,8 +643,6 @@ DHT.prototype.onFindNode = function (node, id, cb) {
 			ret.url = node.url
 		return ret
 	})
-
-	// console.log('findNode called on us, result:', nodes)
 
 	cb(null, nodes)
 }
