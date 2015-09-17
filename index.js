@@ -20,8 +20,7 @@ CHECK proper routing table
 CHECK ref counting
 CHECK handle disconnects (all structure except self._allNodes is transient)
 CHECK Nesting depth? at any rate, some way to decide when to connect directly
-
-* Counting in-progress requests!!!!
+CHECK Counting in-progress requests
 
 
 Better interface: create a node store!
@@ -205,6 +204,8 @@ Simultaneity problems:
 		* higher id wins
 */
 
+var ACTIVE_TIME = 10 // seconds
+
 var Node = function (opt, myId) {
 	var self = this
 	self.id = null // may be set right after constructor, but not necessarily
@@ -228,11 +229,13 @@ var Node = function (opt, myId) {
 
 	self.active = {
 		neighbor: false,
-		substream: 0
+		substream: 0,
+		query: 0
 	}
 
 	var api = {
 		findNode: function (id, cb) {
+			self._refQuery()
 			self.emit('findNode', self, id, cb)
 		},
 		connectTo: function (id, cb) {
@@ -397,6 +400,15 @@ Node.prototype._refSubstream = function (stream) {
 	return unref
 }
 
+Node.prototype._refQuery = function () {
+	var self = this
+
+	self.active.query++
+	setTimeout(function () {
+		self.active.query--
+	}, ACTIVE_TIME * 1000)
+}
+
 Node.prototype.createAppStream = function (name) {
 	var self = this
 
@@ -413,8 +425,6 @@ Node.prototype.replaceStream = function (newStream) {
 
 Node.prototype._setupDirectConn = function (initiator) {
 	var self = this
-
-	self._emitDirect = self._emitDirect || self.emit.bind(self, 'direct')
 
 	// This handles cleaning up if we're replacing another direct connection
 	if (self._directConn)
@@ -433,7 +443,7 @@ Node.prototype._setupDirectConn = function (initiator) {
 			}
 		})
 	})
-	self._directConn.on('connect', emitDirect)
+	self._directConn.on('connect', self.emit.bind(self, 'direct'))
 }
 
 var LOOKUP_TIMEOUT = 10
