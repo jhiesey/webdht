@@ -21,11 +21,14 @@ CHECK ref counting
 CHECK handle disconnects (all structure except self._allNodes is transient)
 CHECK Nesting depth? at any rate, some way to decide when to connect directly
 CHECK Counting in-progress requests
+CHECK Better interface: create a node store!
 
-
-Better interface: create a node store!
-
-
+TODO:
+Find reason for "error in connectFrom: [Error: premature close]"
+Separate Node, DHT, and RoutingTable into separate files
+Test reconnect to bootstrap node
+Remove disconnected nodes from routing table
+Fix application stream failing after direct connection
 
 
 limit number of real connections in a bucket (2?)
@@ -283,7 +286,7 @@ var Node = function (opt, myId) {
 	}, function (appStream, name) {
 		if (name.slice(0, 4) === 'app:') {
 			var emitStream = function () {
-				self.emit('appStream', self.id, appStream, name.slice(4))
+				self.emit('appStream', self.id, name.slice(4), appStream)
 			}
 			if (!self.id)
 				self.on('idSet', emitStream)
@@ -303,8 +306,8 @@ var Node = function (opt, myId) {
 		self.relay = null
 	})
 
-	self._conn.on('close', self.destroy.bind(self))
-	self._conn.on('error', self.emit.bind(self, 'error'))
+	self._conn.on('close', self.destroy.bind(self, null))
+	self._conn.on('error', self.destroy.bind(self, 'error'))
 
 	// TODO: is this really the right logic?
 	Object.defineProperty(self, 'isDirect', {
@@ -364,14 +367,14 @@ var Node = function (opt, myId) {
 inherits(Node, EventEmitter)
 
 // add and remove handlers to 'destroy' to do appropriate cleanup
-Node.prototype.destroy = function () {
+Node.prototype.destroy = function (err) {
 	var self = this
 	if (self._destroyed)
 		return
 
 	self._destroyed = true
 	self._conn.destroy()
-	self.emit('destroy')
+	self.emit('destroy', err)
 }
 
 Node.prototype.connectDirect = function () {
@@ -426,9 +429,12 @@ Node.prototype.replaceStream = function (newStream) {
 Node.prototype._setupDirectConn = function (initiator) {
 	var self = this
 
+	// Must be stored so we can remove the listener if needed
+	self._emitDirect = self._emitDirect || self.emit.bind(self, 'direct')
+
 	// This handles cleaning up if we're replacing another direct connection
 	if (self._directConn)
-		self._directConn.removeListener('connect', emitDirect)
+		self._directConn.removeListener('connect', self._emitDirect)
 
 	self._rpcInitiator = initiator
 	self._directConn = new SimplePeer({
@@ -443,7 +449,7 @@ Node.prototype._setupDirectConn = function (initiator) {
 			}
 		})
 	})
-	self._directConn.on('connect', self.emit.bind(self, 'direct'))
+	self._directConn.on('connect', self._emitDirect)
 }
 
 var LOOKUP_TIMEOUT = 10
@@ -483,13 +489,16 @@ Node.prototype.connectFrom = function (id, stream, cb) {
 	var from = self._mux.receiveStream('from:' + id)
 	var unref = self._refSubstream(from)
 	pump(from, stream, from, function (err) {
+		unref()
+		err = (!err || err.message === 'premature close') ? null : err
 		if (err) {
-			unref()
 			console.error('error in connectFrom:', err)
 		}
 	})
 	self._handle.connectFrom(id, cb)
 }
+
+var RECONNECT_TIMEOUT = 30
 
 var N = 8 // number of nodes to get in one fetch
 
@@ -515,43 +524,57 @@ var DHT = function (id, bootstrapNodes, listenPort) {
 
 	bootstrapNodes = bootstrapNodes || []
 	var bootstrapped = 0
-	bootstrapNodes.forEach(function (url) {
+	var connectBootstrap = function (url) {
+		var counted = false
 		var node = self.connect({
 			url: url
 		})
 		node.on('idSet', function () {
 			bootstrapped++
+			counted = true
 			// Half or more
 			if (bootstrapped >= bootstrapNodes.length - bootstrapped)
 				// TODO: this won't get enough to fill the neighbor table
 				self.findNode(id)
 		})
-	})
+		node.on('destroy', function () {
+			console.warn('bootstrap node destroyed:', url)
+			if (counted)
+				bootstrapped--
+			setTimeout(connectBootstrap.bind(null, url), RECONNECT_TIMEOUT * 1000)
+		})
+	}
+	bootstrapNodes.forEach(connectBootstrap)
 }
+
+inherits(DHT, EventEmitter)
 
 DHT.prototype.sendStream = function (id, name, cb) {
 	var self = this
 
-	var node = self._allNodes[id] 
+	var node = self.routingTable.nodesById[id]
 	if (!node) {
 		self.findNode(id, function (err, closest) {
 			if (err) {
 				return cb(err) 
 			}
-			if (!closest.length || closest[0].node.id !== id)
+			if (!closest.length || closest[0].id !== id)
 				return cb(new Error('Unable to find node with id:', id))
 			node = closest[0].node
 
 			node.connectDirect()
 			cb(null, node.createAppStream(name))
 		})
+	} else {
+		node.connectDirect()
+		cb(null, node.createAppStream(name))
 	}
 }
 
 DHT.prototype._attachNode = function (node) {
 	var self = this
 
-	node.on('findNode', self.onFindNode.bind(self))
+	node.on('findNode', self._onFindNode.bind(self))
 
 	node.on('connectTo', function (from, id, stream, cb) {
 		var to = self.routingTable.nodesById[id]
@@ -628,7 +651,7 @@ DHT.prototype.getClosest = function (id, nodes) {
 	return nodes.slice(0, N)
 }
 
-DHT.prototype.onFindNode = function (node, id, cb) {
+DHT.prototype._onFindNode = function (node, id, cb) {
 	var self = this
 
 	var closest = self.getClosest(id, Object.keys(self.routingTable.nodesById))
@@ -788,4 +811,26 @@ if (typeof window === 'undefined') {
 else {
 	dht = new DHT(id, ['ws://localhost:8085'])
 	window.dht = dht
+}
+
+dht.on('stream', function (err, id, str) {
+	console.log('incoming stream with id:', id)
+	global.stream = str
+	str.on('data', function (data) {
+		console.log(id + ':', data.toString())
+	})
+})
+
+global.createStream = function (node, id) {
+	console.log('outgoing stream with id:', id)
+	dht.sendStream(node, id, function (err, str) {
+		if (err) {
+			console.error('failed to create stream with id:', id)
+		}
+		global.stream = str
+		str.on('data', function (data) {
+			console.log(id + ':', data.toString())
+		})
+	})
+
 }
