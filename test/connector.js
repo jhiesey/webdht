@@ -18,7 +18,9 @@ var client = new Connector(clientId)
 
 client.connectTo({
 	url: 'ws://localhost:8009'
-}, function (conn) {
+}, function (err, conn) {
+	if (err)
+		return console.error(err)
 	console.log('client connected')
 	var stream = conn.openStream('myStream')
 	stream.write('hi!')
