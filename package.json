@@ -42,6 +42,7 @@
     "websocket-stream": "^1.5.1"
   },
   "devDependencies": {
-    "ashify": "^1.0.1"
+    "ashify": "^1.0.1",
+    "wrtc": "0.0.58"
   }
 }
