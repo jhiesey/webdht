@@ -21,16 +21,16 @@ test('Basic websocket connection', function (t) {
 	server.on('connection', function (conn) {
 		t.pass('server got connection')
 		conn.on('stream', function (name, stream) {
-			var buffers = []
 			t.pass('server got stream')
+			var buffers = []
 			stream.on('data', function (data) {
 				buffers.push(data)
 			})
 			stream.on('end', function () {
 				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
-				t.end()
 				server.destroy()
 				client.destroy()
+				t.end()
 			})
 		})
 	})
@@ -58,8 +58,16 @@ test('Connect through bridge', function (t) {
 		t.pass('got connection from right client')
 		conn.on('stream', function (name, stream) {
 			t.equals(name, 'name', 'got stream on client2')
+			var buffers = []
 			stream.on('data', function (data) {
-				console.log(data.toString())
+				buffers.push(data)
+			})
+			stream.on('end', function () {
+				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
+				server.destroy()
+				client1.destroy()
+				client2.destroy()
+				t.end()
 			})
 		})
 
@@ -79,7 +87,8 @@ test('Connect through bridge', function (t) {
 				return console.error(err)
 
 			var stream = conn.openStream('name')
-			stream.write('hi there')
+			stream.write('hi!')
+			stream.end()
 		})
 	}
 
