@@ -2,7 +2,6 @@ var Connector = require('./../lib/connector')
 var test = require('tape')
 
 test('Basic websocket connection', function (t) {
-
 	var serverId = '8e2972040d36d9dfba6b7a0bfc5b9bdac28f2588'
 	var server = new Connector(serverId, 8009)
 
@@ -16,6 +15,7 @@ test('Basic websocket connection', function (t) {
 			})
 			stream.on('end', function () {
 				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
+				t.end()
 			})
 		})
 	})
@@ -30,7 +30,7 @@ test('Basic websocket connection', function (t) {
 			t.fail('connectTo failed')
 			return console.error(err)
 		}
-		t.ok('client connected')
+		t.pass('client connected')
 		var stream = conn.openStream('myStream')
 		stream.write('hi!')
 		stream.end()
