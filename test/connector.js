@@ -47,10 +47,23 @@ test('Basic websocket connection', function (t) {
 	})
 })
 
-test('Upgrade to WebRTC', function (t) {
+test('Connect through bridge', function (t) {
 	var server = new Connector(ids[0], 8009)
 	var client1 = new Connector(ids[1])
 	var client2 = new Connector(ids[2])
+
+	client2.on('connection', function (conn) {
+		if (conn.id !== client1.id)
+			return
+		t.pass('got connection from right client')
+		conn.on('stream', function (name, stream) {
+			t.equals(name, 'name', 'got stream on client2')
+			stream.on('data', function (data) {
+				console.log(data.toString())
+			})
+		})
+
+	})
 
 	var count = 0
 	function ready() {
@@ -64,22 +77,16 @@ test('Upgrade to WebRTC', function (t) {
 			t.notOk(err, 'indirect connectTo')
 			if (err)
 				return console.error(err)
-			conn.upgrade(function (err) {
-				t.notOk(err, 'upgrade')
-				if (err)
-					return console.error(err)
-				t.end()
-				server.destroy()
-				client1.destroy()
-				client2.destroy()
-			})
+
+			var stream = conn.openStream('name')
+			stream.write('hi there')
 		})
 	}
 
 	client1.connectTo({
 		url: 'ws://localhost:8009'
 	}, function (err, conn) {
-		t.notOk(err, 'connectTo')
+		t.notOk(err, 'client1 connectTo')
 		if (err)
 			return console.error(err)
 		client1Server = conn
@@ -89,10 +96,79 @@ test('Upgrade to WebRTC', function (t) {
 	client2.connectTo({
 		url: 'ws://localhost:8009'
 	}, function (err, conn) {
-		t.notOk(err, 'connectTo')
+		t.notOk(err, 'client2 connectTo')
 		if (err)
 			return console.error(err)
 		client2Server = conn
 		ready()
 	})
 })
+
+// test('Upgrade to WebRTC', function (t) {
+// 	var server = new Connector(ids[0], 8009)
+// 	var client1 = new Connector(ids[1])
+// 	var client2 = new Connector(ids[2])
+
+// 	client2.on('connection', function (conn) {
+// 		if (conn.id !== client1.id)
+// 			return
+// 		t.pass('got connection from right client')
+// 		conn.on('stream', function (name, stream) {
+// 			t.equals(name, 'name', 'got stream on client2')
+// 			stream.on('data', function (data) {
+// 				console.log(data.toString())
+// 			})
+// 		})
+
+// 	})
+
+// 	var count = 0
+// 	function ready() {
+// 		if (++count < 2)
+// 			return
+
+// 		client1.connectTo({
+// 			id: client2.id,
+// 			bridge: client1Server
+// 		}, function (err, conn) {
+// 			t.notOk(err, 'indirect connectTo')
+// 			if (err)
+// 				return console.error(err)
+
+// 			var stream = conn.openStream('name')
+// 			stream.write('hi there')
+
+
+
+// 			// conn.upgrade(function (err) {
+// 			// 	t.notOk(err, 'upgrade')
+// 			// 	if (err)
+// 			// 		return console.error(err)
+// 			// 	t.end()
+// 			// 	server.destroy()
+// 			// 	client1.destroy()
+// 			// 	client2.destroy()
+// 			// })
+// 		})
+// 	}
+
+// 	client1.connectTo({
+// 		url: 'ws://localhost:8009'
+// 	}, function (err, conn) {
+// 		t.notOk(err, 'client1 connectTo')
+// 		if (err)
+// 			return console.error(err)
+// 		client1Server = conn
+// 		ready()
+// 	})
+
+// 	client2.connectTo({
+// 		url: 'ws://localhost:8009'
+// 	}, function (err, conn) {
+// 		t.notOk(err, 'client2 connectTo')
+// 		if (err)
+// 			return console.error(err)
+// 		client2Server = conn
+// 		ready()
+// 	})
+// })
