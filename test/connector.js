@@ -1,8 +1,6 @@
 var Connector = require('./../lib/connector')
 var test = require('tape')
 
-var process = require('process')
-
 var ids = [
 	'd8a775cb11dd85f3610b5e686bdd944763e581b2',
 	'0d2afaf28eb637eb24b90fc32beaa2a0f06c3b65',
