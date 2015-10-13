@@ -38,17 +38,61 @@ test('Basic websocket connection', function (t) {
 	client.connectTo({
 		url: 'ws://localhost:8009'
 	}, function (err, conn) {
-		if (err) {
-			t.fail('connectTo failed')
+		t.notOk(err, 'connectTo')
+		if (err)
 			return console.error(err)
-		}
-		t.pass('client connected')
 		var stream = conn.openStream('myStream')
 		stream.write('hi!')
 		stream.end()
 	})
 })
 
-// test('Upgrade to WebRTC', function (t) {
-// 	var server = new Connector(ids[])
-// })
+test('Upgrade to WebRTC', function (t) {
+	var server = new Connector(ids[0], 8009)
+	var client1 = new Connector(ids[1])
+	var client2 = new Connector(ids[2])
+
+	var count = 0
+	function ready() {
+		if (++count < 2)
+			return
+
+		client1.connectTo({
+			id: client2.id,
+			bridge: client1Server
+		}, function (err, conn) {
+			t.notOk(err, 'indirect connectTo')
+			if (err)
+				return console.error(err)
+			conn.upgrade(function (err) {
+				t.notOk(err, 'upgrade')
+				if (err)
+					return console.error(err)
+				t.end()
+				server.destroy()
+				client1.destroy()
+				client2.destroy()
+			})
+		})
+	}
+
+	client1.connectTo({
+		url: 'ws://localhost:8009'
+	}, function (err, conn) {
+		t.notOk(err, 'connectTo')
+		if (err)
+			return console.error(err)
+		client1Server = conn
+		ready()
+	})
+
+	client2.connectTo({
+		url: 'ws://localhost:8009'
+	}, function (err, conn) {
+		t.notOk(err, 'connectTo')
+		if (err)
+			return console.error(err)
+		client2Server = conn
+		ready()
+	})
+})
