@@ -49,6 +49,6 @@ test('Basic websocket connection', function (t) {
 	})
 })
 
-test('Upgrade to WebRTC', function (t) {
-	var server = new Connector(ids[])
-})
+// test('Upgrade to WebRTC', function (t) {
+// 	var server = new Connector(ids[])
+// })
