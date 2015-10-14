@@ -19,9 +19,9 @@ test('Basic websocket connection', function (t) {
 	var client = new Connector(ids[1])
 
 	server.on('connection', function (conn) {
-		t.pass('server got connection')
+		t.equal(conn.id, client.id, 'got connection from right client')
 		conn.on('stream', function (name, stream) {
-			t.pass('server got stream')
+			t.equal(name, 'myStream', 'server got stream')
 			var buffers = []
 			stream.on('data', function (data) {
 				buffers.push(data)
@@ -185,5 +185,73 @@ test('Upgrade to WebRTC', function (t) {
 			return console.error(err)
 		client2Server = conn
 		ready()
+	})
+})
+
+test('Simultaneous websocket connections', function (t) {
+	var server = new Connector(ids[0], 8009)
+	var client = new Connector(ids[1], 8010)
+
+	var finished = false
+	function end () {
+		if (finished) {
+			server.destroy()
+			client.destroy()
+			t.end()
+		}
+		finished = true
+	}
+
+	var finished = false
+	server.on('connection', function (conn) {
+		t.equal(conn.id, client.id, 'got connection from right client')
+		conn.on('stream', function (name, stream) {
+			t.equal(name, 'myStream1', 'server got stream')
+			var buffers = []
+			stream.on('data', function (data) {
+				buffers.push(data)
+			})
+			stream.on('end', function () {
+				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
+				end()
+			})
+		})
+	})
+
+	client.on('connection', function (conn) {
+		t.equal(conn.id, server.id, 'got connection from right client')
+		conn.on('stream', function (name, stream) {
+			t.equal(name, 'myStream2', 'server got stream')
+			var buffers = []
+			stream.on('data', function (data) {
+				buffers.push(data)
+			})
+			stream.on('end', function () {
+				t.equals(Buffer.concat(buffers).toString(), 'hi again', 'correct data')
+				end()
+			})
+		})
+	})
+
+	client.connectTo({
+		url: 'ws://localhost:8009'
+	}, function (err, conn) {
+		t.notOk(err, 'connectTo')
+		if (err)
+			return console.error(err)
+		var stream = conn.openStream('myStream1')
+		stream.write('hi!')
+		stream.end()
+	})
+
+	server.connectTo({
+		url: 'ws://localhost:8010'
+	}, function (err, conn) {
+		t.notOk(err, 'connectTo')
+		if (err)
+			return console.error(err)
+		var stream = conn.openStream('myStream2')
+		stream.write('hi again')
+		stream.end()
 	})
 })

@@ -43,6 +43,7 @@
   },
   "devDependencies": {
     "ashify": "^1.0.1",
+    "istanbul": "^0.3.22",
     "tape": "^4.2.1",
     "wrtc": "0.0.58"
   }
