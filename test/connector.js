@@ -189,24 +189,24 @@ test('Upgrade to WebRTC', function (t) {
 })
 
 test('Simultaneous websocket connections', function (t) {
-	var server = new Connector(ids[0], 8009)
-	var client = new Connector(ids[1], 8010)
+	var server1 = new Connector(ids[0], 8009)
+	var server2 = new Connector(ids[1], 8010)
 
 	var finished = false
 	function end () {
 		if (finished) {
-			server.destroy()
-			client.destroy()
+			server1.destroy()
+			server2.destroy()
 			t.end()
 		}
 		finished = true
 	}
 
 	var finished = false
-	server.on('connection', function (conn) {
-		t.equal(conn.id, client.id, 'got connection from right client')
+	server1.on('connection', function (conn) {
+		t.equal(conn.id, server2.id, 'got connection from server 2')
 		conn.on('stream', function (name, stream) {
-			t.equal(name, 'myStream1', 'server got stream')
+			t.equal(name, 'myStream1', 'server 1 got stream')
 			var buffers = []
 			stream.on('data', function (data) {
 				buffers.push(data)
@@ -218,10 +218,10 @@ test('Simultaneous websocket connections', function (t) {
 		})
 	})
 
-	client.on('connection', function (conn) {
-		t.equal(conn.id, server.id, 'got connection from right client')
+	server2.on('connection', function (conn) {
+		t.equal(conn.id, server1.id, 'got connection from server 1')
 		conn.on('stream', function (name, stream) {
-			t.equal(name, 'myStream2', 'server got stream')
+			t.equal(name, 'myStream2', 'server 2 got stream')
 			var buffers = []
 			stream.on('data', function (data) {
 				buffers.push(data)
@@ -233,10 +233,10 @@ test('Simultaneous websocket connections', function (t) {
 		})
 	})
 
-	client.connectTo({
+	server2.connectTo({
 		url: 'ws://localhost:8009'
 	}, function (err, conn) {
-		t.notOk(err, 'connectTo')
+		t.notOk(err, 'server 2 connectTo')
 		if (err)
 			return console.error(err)
 		var stream = conn.openStream('myStream1')
@@ -244,10 +244,10 @@ test('Simultaneous websocket connections', function (t) {
 		stream.end()
 	})
 
-	server.connectTo({
+	server1.connectTo({
 		url: 'ws://localhost:8010'
 	}, function (err, conn) {
-		t.notOk(err, 'connectTo')
+		t.notOk(err, 'server 1 connectTo')
 		if (err)
 			return console.error(err)
 		var stream = conn.openStream('myStream2')
