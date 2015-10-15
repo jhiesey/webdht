@@ -193,8 +193,11 @@ test('Simultaneous websocket connections', function (t) {
 	var server2 = new Connector(ids[1], 8010)
 
 	var finished = false
+	var server1Incoming, server1Outgoing, server2Incoming, server2Outgoing
 	function end () {
 		if (finished) {
+			t.equal(server1Incoming, server1Outgoing, 'server 1 same connection')
+			t.equal(server2Incoming, server2Outgoing, 'server 2 same connection')
 			server1.destroy()
 			server2.destroy()
 			t.end()
@@ -204,6 +207,7 @@ test('Simultaneous websocket connections', function (t) {
 
 	var finished = false
 	server1.on('connection', function (conn) {
+		server1Incoming = conn
 		t.equal(conn.id, server2.id, 'got connection from server 2')
 		conn.on('stream', function (name, stream) {
 			t.equal(name, 'myStream1', 'server 1 got stream')
@@ -219,6 +223,7 @@ test('Simultaneous websocket connections', function (t) {
 	})
 
 	server2.on('connection', function (conn) {
+		server2Incoming = conn
 		t.equal(conn.id, server1.id, 'got connection from server 1')
 		conn.on('stream', function (name, stream) {
 			t.equal(name, 'myStream2', 'server 2 got stream')
@@ -239,6 +244,7 @@ test('Simultaneous websocket connections', function (t) {
 		t.notOk(err, 'server 2 connectTo')
 		if (err)
 			return console.error(err)
+		server2Outgoing = conn
 		var stream = conn.openStream('myStream1')
 		stream.write('hi!')
 		stream.end()
@@ -250,6 +256,7 @@ test('Simultaneous websocket connections', function (t) {
 		t.notOk(err, 'server 1 connectTo')
 		if (err)
 			return console.error(err)
+		server1Outgoing = conn
 		var stream = conn.openStream('myStream2')
 		stream.write('hi again')
 		stream.end()
