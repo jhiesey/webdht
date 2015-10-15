@@ -271,41 +271,41 @@ test('Simultaneous upgrade to WebRTC', function (t) {
 	var client2Incoming, client1Outgoing
 	var indirectCount = 0
 	function indirectReady() {
-			if (++indirectCount < 2)
+		if (++indirectCount < 2)
+			return
+
+		client1Outgoing.upgrade(function (err) {
+			t.notOk(err, 'upgraded')
+			if (err)
 				return
 
-			client1Outgoing.upgrade(function (err) {
-				t.notOk(err, 'upgraded')
-				if (err)
-					return
+			var stream = client1Outgoing.openStream('name')
+			stream.write('hi!')
+			stream.end()
+		})
 
-				var stream = client1Outgoing.openStream('name')
-				stream.write('hi!')
-				stream.end()
-			})
+		client2Incoming.upgrade(function (err) {
+			t.notOk(err, 'upgraded')
+			if (err)
+				return
+		})
 
-			client2Incoming.upgrade(function (err) {
-				t.notOk(err, 'upgraded')
-				if (err)
-					return
+		client2Incoming.on('stream', function (name, stream) {
+			t.equals(name, 'name', 'got stream on client2')
+			var buffers = []
+			stream.on('data', function (data) {
+				buffers.push(data)
 			})
-
-			client2Incoming.on('stream', function (name, stream) {
-				t.equals(name, 'name', 'got stream on client2')
-				var buffers = []
-				stream.on('data', function (data) {
-					buffers.push(data)
-				})
-				stream.on('end', function () {
-					t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
-					client1.destroy()
-					//client2.destroy()
-					setTimeout(function () { // TODO: fix cleanup
-						server.destroy()
-						t.end()
-					}, 100)
-				})
+			stream.on('end', function () {
+				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
+				client1.destroy()
+				//client2.destroy()
+				setTimeout(function () { // TODO: fix cleanup
+					server.destroy()
+					t.end()
+				}, 100)
 			})
+		})
 	}
 
 	client2.on('connection', function (conn) {
