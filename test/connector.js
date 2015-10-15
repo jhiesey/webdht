@@ -353,3 +353,10 @@ test('Simultaneous upgrade to WebRTC', function (t) {
 		websocketsReady()
 	})
 })
+
+// TODO: make the process exit without this
+test('exit', function (t) {
+	t.end()
+	process.exit()
+})
+
