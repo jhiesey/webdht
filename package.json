@@ -28,6 +28,7 @@
   "homepage": "https://github.com/jhiesey/webdht#readme",
   "dependencies": {
     "browserify": "^11.0.1",
+    "dezalgo": "^1.0.3",
     "duplexify": "^3.4.2",
     "express": "^4.13.3",
     "hat": "0.0.3",
