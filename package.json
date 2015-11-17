@@ -27,6 +27,7 @@
   },
   "homepage": "https://github.com/jhiesey/webdht#readme",
   "dependencies": {
+    "async": "^1.5.0",
     "browserify": "^11.0.1",
     "dezalgo": "^1.0.3",
     "duplexify": "^3.4.2",
@@ -46,7 +47,10 @@
   "devDependencies": {
     "ashify": "^1.0.1",
     "istanbul": "^0.3.22",
-    "tape": "^4.2.1",
+    "proxyquire": "^1.7.3",
+    "tape": "^4.2.1"
+  },
+  "optionalDependencies": {
     "wrtc": "0.0.58"
   },
   "browser": {

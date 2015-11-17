@@ -47,7 +47,7 @@ test('Basic websocket connection', function (t) {
 	})
 })
 
-test('Connect through bridge', function (t) {
+test('Connect through relay', function (t) {
 	var server = new Connector(ids[0], 8009)
 	var client1 = new Connector(ids[1])
 	var client2 = new Connector(ids[2])
@@ -82,7 +82,7 @@ test('Connect through bridge', function (t) {
 
 		client1.connectTo({
 			id: client2.id,
-			bridge: client1Server
+			relay: client1Server
 		}, function (err, conn) {
 			t.notOk(err, 'indirect connectTo')
 			if (err)
@@ -149,7 +149,7 @@ test('Upgrade to WebRTC', function (t) {
 
 		client1.connectTo({
 			id: client2.id,
-			bridge: client1Server
+			relay: client1Server
 		}, function (err, conn) {
 			t.notOk(err, 'indirect connectTo')
 			if (err)
@@ -323,7 +323,7 @@ test('Simultaneous upgrade to WebRTC', function (t) {
 
 		client1.connectTo({
 			id: client2.id,
-			bridge: client1Server
+			relay: client1Server
 		}, function (err, conn) {
 			t.notOk(err, 'indirect connectTo')
 			if (err)
