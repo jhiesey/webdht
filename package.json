@@ -41,7 +41,7 @@
     "pump": "^2.0.1",
     "rpc-stream": "^2.1.1",
     "simple-peer": "^8.2.0",
-    "simple-websocket": "^5.1.0",
+    "simple-websocket": "^5.1.1",
     "through2": "^2.0.0",
     "websocket-stream": "^5.1.1"
   },

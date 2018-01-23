@@ -66,10 +66,8 @@ test('Connect through relay', function (t) {
 				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
 				client1.destroy()
 				client2.destroy()
-				setTimeout(function () { // TODO: fix cleanup
-					server.destroy()
-					t.end()
-				}, 100)
+				server.destroy()
+				t.end()
 			})
 		})
 
@@ -133,11 +131,9 @@ test('Upgrade to WebRTC', function (t) {
 			stream.on('end', function () {
 				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
 				client1.destroy()
-				//client2.destroy()
-				setTimeout(function () { // TODO: fix cleanup
-					server.destroy()
-					t.end()
-				}, 100)
+				client2.destroy()
+				server.destroy()
+				t.end()
 			})
 		})
 	})
@@ -299,11 +295,9 @@ test('Simultaneous upgrade to WebRTC', function (t) {
 			stream.on('end', function () {
 				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
 				client1.destroy()
-				client2.destroy() // TODO: why is this line necessary for no errors?
-				setTimeout(function () { // TODO: fix cleanup
-					server.destroy()
-					t.end()
-				}, 100)
+				client2.destroy()
+				server.destroy()
+				t.end()
 			})
 		})
 	}
