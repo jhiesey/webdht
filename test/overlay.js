@@ -32,6 +32,21 @@ nodes[ids[1]] = {
 		ids[3]
 	]
 }
+nodes[ids[2]] = {
+	neighbors: [
+		ids[4]
+	]
+}
+nodes[ids[3]] = {
+	neighbors: [
+		ids[5]
+	]
+}
+nodes[ids[4]] = {
+	neighbors: [
+		ids[6]
+	]
+}
 
 var urls = {
 	'ws://example.com': ids[1]
@@ -102,12 +117,6 @@ ConnectorMock = function (id) {
 	nodes[myId].neighbors.forEach(function (nodeId) {
 		self.connections[nodeId] = new ConnectionMock(nodeId)
 	})
-
-	// process.nextTick(function () {
-	// 	nodes[myId].neighbors.forEach(function (nodeId) {
-	// 		self.emit('connection', self.connections[nodeId])
-	// 	})
-	// })
 }
 
 inherits(ConnectorMock, EventEmitter)
@@ -144,18 +153,6 @@ var Overlay = proxyquire('./../lib/overlay', {
 	'./connector': ConnectorMock
 })
 
-// Connects to exact node
-/*
-opts.has
-opts.closest = number
-opts.shared
-opts.upgrade
-
-If closest is specified, the results are limited to this many. Otherwise exact match only.
-If has is specified, search ends early when 'has' found
-*/
-//Overlay.prototype.openStream = function (id, name, opts, cb)
-
 function extractJsonStream (stream, cb) {
 	var buffers = []
 	stream.on('data', function (buffer) {
@@ -174,6 +171,17 @@ function extractJsonStream (stream, cb) {
 		cb(err)
 	})
 }
+
+/*
+opts.has
+opts.closest = number
+opts.shared
+opts.upgrade
+
+If closest is specified, the results are limited to this many. Otherwise exact match only.
+If has is specified, search ends early when 'has' found
+*/
+//Overlay.prototype.openStream = function (id, name, opts, cb)
 
 test('Query bootstrap node', function (t) {
 	var overlay = new Overlay(myId, null, ['ws://example.com'])
@@ -205,6 +213,34 @@ test('Query bootstrap node neighbor', function (t) {
 				t.equal(obj.name, 'one', 'name correct')
 				t.end()
 			})
+		})
+	})
+})
+
+test('Query through long chain', function (t) {
+	var overlay = new Overlay(myId, null, ['ws://example.com'])
+
+	overlay.on('ready', function () {
+		overlay.openStream(ids[6], 'one', {}, function (err, streams) {
+			t.notOk(err, 'five away lookup')
+			t.equal(streams.length, 1, 'correct number of streams')
+			extractJsonStream(streams[0], function (err, obj) {
+				t.notOk(err, 'valid stream data')
+				t.equal(obj.id, ids[6], 'id correct')
+				t.equal(obj.name, 'one', 'name correct')
+				t.end()
+			})
+		})
+	})
+})
+
+test('Query unreachable', function (t) {
+	var overlay = new Overlay(myId, null, ['ws://example.com'])
+
+	overlay.on('ready', function () {
+		overlay.openStream(ids[9], 'one', {}, function (err, streams) {
+			t.ok(err, 'unreachable lookup')
+			t.end()
 		})
 	})
 })
