@@ -14,9 +14,9 @@ var ids = [
 	'e2d436b8730be3b696e1073028f33ec349287f5a'
 ]
 
-test('Basic websocket connection', function (t) {
-	var server = new Connector(ids[0], 8009)
-	var client = new Connector(ids[1])
+test.skip('Basic websocket connection', function (t) {
+	var server = new Connector({id: ids[0], wsPort: 8009})
+	var client = new Connector({id: ids[1]})
 
 	server.on('connection', function (conn) {
 		t.equal(conn.id, client.id, 'got connection from right client')
@@ -47,10 +47,10 @@ test('Basic websocket connection', function (t) {
 	})
 })
 
-test('Connect through relay', function (t) {
-	var server = new Connector(ids[0], 8009)
-	var client1 = new Connector(ids[1])
-	var client2 = new Connector(ids[2])
+test.skip('Connect through relay', function (t) {
+	var server = new Connector({id: ids[0], wsPort: 8009})
+	var client1 = new Connector({id: ids[1]})
+	var client2 = new Connector({id: ids[2]})
 
 	client2.on('connection', function (conn) {
 		if (conn.id !== client1.id)
@@ -114,9 +114,28 @@ test('Connect through relay', function (t) {
 })
 
 test('Upgrade to WebRTC', function (t) {
-	var server = new Connector(ids[0], 8009)
-	var client1 = new Connector(ids[1])
-	var client2 = new Connector(ids[2])
+	var server = new Connector({id: ids[0], wsPort: 8009})
+	var client1 = new Connector({id: ids[1]})
+	var client2 = new Connector({id: ids[2]})
+	let client1Conn, client2Conn
+
+	var serverConns = []
+	server.on('connection', function (conn) {
+		serverConns.push(conn)
+		conn.on('close', function () {
+			console.log('SERVER CONN CLOSED')
+			serverConns.splice(serverConns.indexOf(conn), 1)
+
+			if (serverConns.length === 0) {
+				t.pass('server connections all closed')
+
+				client1.destroy()
+				client2.destroy()
+				server.destroy()
+				t.end()
+			}
+		})
+	})
 
 	client2.on('connection', function (conn) {
 		if (conn.id !== client1.id)
@@ -130,10 +149,12 @@ test('Upgrade to WebRTC', function (t) {
 			})
 			stream.on('end', function () {
 				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
-				client1.destroy()
-				client2.destroy()
-				server.destroy()
-				t.end()
+				// this should cause everything to close
+
+				// setTimeout(function () {
+				// 	client1Conn.close()
+				// 	client2Conn.close()
+				// }, 1000)
 			})
 		})
 	})
@@ -159,6 +180,7 @@ test('Upgrade to WebRTC', function (t) {
 				var stream = conn.openStream('name')
 				stream.write('hi!')
 				stream.end()
+				conn.close()
 			})
 		})
 	}
@@ -166,6 +188,7 @@ test('Upgrade to WebRTC', function (t) {
 	client1.connectTo({
 		url: 'ws://localhost:8009'
 	}, function (err, conn) {
+		client1Conn = conn
 		t.notOk(err, 'client1 connectTo')
 		if (err)
 			return console.error(err)
@@ -176,6 +199,7 @@ test('Upgrade to WebRTC', function (t) {
 	client2.connectTo({
 		url: 'ws://localhost:8009'
 	}, function (err, conn) {
+		client2Conn = conn
 		t.notOk(err, 'client2 connectTo')
 		if (err)
 			return console.error(err)
@@ -184,9 +208,9 @@ test('Upgrade to WebRTC', function (t) {
 	})
 })
 
-test('Simultaneous websocket connections', function (t) {
-	var server1 = new Connector(ids[0], 8009)
-	var server2 = new Connector(ids[1], 8010)
+test.skip('Simultaneous websocket connections', function (t) {
+	var server1 = new Connector({id: ids[0], wsPort: 8009})
+	var server2 = new Connector({id: ids[1], wsPort: 8010})
 
 	var finished = false
 	var server1Incoming, server1Outgoing, server2Incoming, server2Outgoing
@@ -259,10 +283,10 @@ test('Simultaneous websocket connections', function (t) {
 	})
 })
 
-test('Simultaneous upgrade to WebRTC', function (t) {
-	var server = new Connector(ids[0], 8009)
-	var client1 = new Connector(ids[1])
-	var client2 = new Connector(ids[2])
+test.skip('Simultaneous upgrade to WebRTC', function (t) {
+	var server = new Connector({id: ids[0], wsPort: 8009})
+	var client1 = new Connector({id: ids[1]})
+	var client2 = new Connector({id: ids[2]})
 
 	var client2Incoming, client1Outgoing
 	var indirectCount = 0
