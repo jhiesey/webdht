@@ -1,6 +1,10 @@
 var Connector = require('./../lib/connector')
 var test = require('tape')
 
+let pull = require('pull-stream')
+let pullCollect = require('pull-stream/sinks/collect')
+let pullOnce = require('pull-stream/sources/once')
+
 var ids = [
 	'd8a775cb11dd85f3610b5e686bdd944763e581b2',
 	'0d2afaf28eb637eb24b90fc32beaa2a0f06c3b65',
@@ -14,7 +18,7 @@ var ids = [
 	'e2d436b8730be3b696e1073028f33ec349287f5a'
 ]
 
-test.skip('Basic websocket connection', function (t) {
+test('Basic websocket connection', function (t) {
 	var server = new Connector({id: ids[0], wsPort: 8009})
 	var client = new Connector({id: ids[1]})
 
@@ -22,16 +26,14 @@ test.skip('Basic websocket connection', function (t) {
 		t.equal(conn.id, client.id, 'got connection from right client')
 		conn.on('stream', function (name, stream) {
 			t.equal(name, 'myStream', 'server got stream')
-			var buffers = []
-			stream.on('data', function (data) {
-				buffers.push(data)
-			})
-			stream.on('end', function () {
-				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
+
+			let data = pullCollect(function (s) {
+				t.equals(Buffer.concat(s), 'hi!', 'correct data')
 				server.destroy()
 				client.destroy()
 				t.end()
 			})
+			pull(stream, data)
 		})
 	})
 
@@ -41,9 +43,7 @@ test.skip('Basic websocket connection', function (t) {
 		t.notOk(err, 'connectTo')
 		if (err)
 			return console.error(err)
-		var stream = conn.openStream('myStream')
-		stream.write('hi!')
-		stream.end()
+		pull(pullOnce('hi!'), conn.openStream('myStream'))
 	})
 })
 
@@ -113,7 +113,7 @@ test.skip('Connect through relay', function (t) {
 	})
 })
 
-test('Upgrade to WebRTC', function (t) {
+test.skip('Upgrade to WebRTC', function (t) {
 	var server = new Connector({id: ids[0], wsPort: 8009})
 	var client1 = new Connector({id: ids[1]})
 	var client2 = new Connector({id: ids[2]})
