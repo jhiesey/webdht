@@ -27,13 +27,13 @@ test('Basic websocket connection', function (t) {
 		conn.on('stream', function (name, stream) {
 			t.equal(name, 'myStream', 'server got stream')
 
-			let data = pullCollect(function (s) {
-				t.equals(Buffer.concat(s), 'hi!', 'correct data')
+			pull(stream, pullCollect(function (err, s) {
+				t.notOk(err, 'no stream error')
+				t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
 				server.destroy()
 				client.destroy()
 				t.end()
-			})
-			pull(stream, data)
+			}))
 		})
 	})
 
@@ -43,11 +43,11 @@ test('Basic websocket connection', function (t) {
 		t.notOk(err, 'connectTo')
 		if (err)
 			return console.error(err)
-		pull(pullOnce('hi!'), conn.openStream('myStream'))
+		pull(pullOnce(Buffer.from('hi!')), conn.openStream('myStream'))
 	})
 })
 
-test.skip('Connect through relay', function (t) {
+test('Connect through relay', function (t) {
 	var server = new Connector({id: ids[0], wsPort: 8009})
 	var client1 = new Connector({id: ids[1]})
 	var client2 = new Connector({id: ids[2]})
@@ -58,19 +58,16 @@ test.skip('Connect through relay', function (t) {
 		t.pass('got connection from right client')
 		conn.on('stream', function (name, stream) {
 			t.equals(name, 'name', 'got stream on client2')
-			var buffers = []
-			stream.on('data', function (data) {
-				buffers.push(data)
-			})
-			stream.on('end', function () {
-				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
+
+			pull(stream, pullCollect(function (err, s) {
+				t.notOk(err, 'no stream error')
+				t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
+				server.destroy()
 				client1.destroy()
 				client2.destroy()
-				server.destroy()
 				t.end()
-			})
+			}))
 		})
-
 	})
 
 	var count = 0
@@ -78,6 +75,7 @@ test.skip('Connect through relay', function (t) {
 		if (++count < 2)
 			return
 
+		Connector.dddd = true
 		client1.connectTo({
 			id: client2.id,
 			relay: client1Server
@@ -86,9 +84,7 @@ test.skip('Connect through relay', function (t) {
 			if (err)
 				return console.error(err)
 
-			var stream = conn.openStream('name')
-			stream.write('hi!')
-			stream.end()
+			pull(pullOnce(Buffer.from('hi!')), conn.openStream('name'))
 		})
 	}
 
