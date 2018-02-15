@@ -109,7 +109,7 @@ test('Connect through relay', function (t) {
 	})
 })
 
-test.skip('Upgrade to WebRTC', function (t) {
+test('Upgrade to WebRTC', function (t) {
 	var server = new Connector({id: ids[0], wsPort: 8009})
 	var client1 = new Connector({id: ids[1]})
 	var client2 = new Connector({id: ids[2]})
@@ -127,7 +127,7 @@ test.skip('Upgrade to WebRTC', function (t) {
 
 				client1.destroy()
 				client2.destroy()
-				server.destroy()
+				// server.destroy()
 				t.end()
 			}
 		})
@@ -139,19 +139,19 @@ test.skip('Upgrade to WebRTC', function (t) {
 		t.pass('got connection from right client')
 		conn.on('stream', function (name, stream) {
 			t.equals(name, 'name', 'got stream on client2')
-			var buffers = []
-			stream.on('data', function (data) {
-				buffers.push(data)
-			})
-			stream.on('end', function () {
-				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
-				// this should cause everything to close
 
-				// setTimeout(function () {
-				// 	client1Conn.close()
-				// 	client2Conn.close()
-				// }, 1000)
-			})
+			pull(stream, pullCollect(function (err, s) {
+				t.notOk(err, 'no stream error')
+				t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
+
+				// this should cause everything to close
+				setTimeout(function () {
+					client1Conn.close()
+					client2Conn.close()
+
+					server.destroy() // TODO: not necessary?
+				}, 1000)
+			}))
 		})
 	})
 
@@ -173,10 +173,7 @@ test.skip('Upgrade to WebRTC', function (t) {
 				if (err)
 					return
 
-				var stream = conn.openStream('name')
-				stream.write('hi!')
-				stream.end()
-				conn.close()
+				pull(pullOnce(Buffer.from('hi!')), conn.openStream('name'))
 			})
 		})
 	}
