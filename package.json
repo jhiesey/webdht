@@ -28,7 +28,7 @@
   "homepage": "https://github.com/jhiesey/webdht#readme",
   "dependencies": {
     "async": "^2.6.0",
-    "browserify": "^15.2.0",
+    "browserify": "^16.1.0",
     "dezalgo": "^1.0.3",
     "duplexify": "^3.4.2",
     "electron-webrtc": "^0.3.0",
@@ -41,15 +41,14 @@
     "once": "^1.3.2",
     "pull-pair": "^1.1.0",
     "pull-ws": "^3.3.0",
-    "simple-peer": "^8.2.0",
-    "simple-websocket": "^5.1.1",
-    "stream-to-pull-stream": "^1.7.2",
+    "simple-peer": "^9.0.0",
+    "stream-to-pull-stream": "^1.7.2"
   },
   "devDependencies": {
     "ashify": "^1.0.1",
     "istanbul": "^0.4.5",
     "proxyquire": "^1.7.3",
-    "tape": "^4.2.1"
+    "tape": "^4.9.0"
   },
   "optionalDependencies": {
     "wrtc": "0.0.65"

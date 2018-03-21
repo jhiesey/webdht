@@ -5,6 +5,9 @@ Architecture:
 Connector:
 * connectTo url or connectTo id, relay
 
+Connection ending behavior:
+
+
 We should test this independently!
 
 

@@ -75,7 +75,6 @@ test('Connect through relay', function (t) {
 		if (++count < 2)
 			return
 
-		Connector.dddd = true
 		client1.connectTo({
 			id: client2.id,
 			relay: client1Server
@@ -124,11 +123,10 @@ test('Upgrade to WebRTC', function (t) {
 
 			if (serverConns.length === 0) {
 				t.pass('server connections all closed')
-
+				// TODO: this is never running!
 				client1.destroy()
 				client2.destroy()
-				// server.destroy()
-				t.end()
+				server.destroy()
 			}
 		})
 	})
@@ -144,13 +142,15 @@ test('Upgrade to WebRTC', function (t) {
 				t.notOk(err, 'no stream error')
 				t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
 
-				// this should cause everything to close
-				setTimeout(function () {
-					client1Conn.close()
-					client2Conn.close()
+				client1Conn.close()
+				client2Conn.close()
 
-					server.destroy() // TODO: not necessary?
-				}, 1000)
+				// TODO: should happen above
+				client1.destroy()
+				client2.destroy()
+				server.destroy()
+
+				t.end()
 			}))
 		})
 	})
@@ -201,14 +201,14 @@ test('Upgrade to WebRTC', function (t) {
 	})
 })
 
-test.skip('Simultaneous websocket connections', function (t) {
+test('Simultaneous websocket connections', function (t) {
 	var server1 = new Connector({id: ids[0], wsPort: 8009})
 	var server2 = new Connector({id: ids[1], wsPort: 8010})
 
 	var finished = false
 	var server1Incoming, server1Outgoing, server2Incoming, server2Outgoing
 	function end () {
-		if (finished) {
+		if (true) {
 			t.equal(server1Incoming, server1Outgoing, 'server 1 same connection')
 			t.equal(server2Incoming, server2Outgoing, 'server 2 same connection')
 			server1.destroy()
@@ -218,20 +218,16 @@ test.skip('Simultaneous websocket connections', function (t) {
 		finished = true
 	}
 
-	var finished = false
 	server1.on('connection', function (conn) {
 		server1Incoming = conn
 		t.equal(conn.id, server2.id, 'got connection from server 2')
 		conn.on('stream', function (name, stream) {
 			t.equal(name, 'myStream1', 'server 1 got stream')
-			var buffers = []
-			stream.on('data', function (data) {
-				buffers.push(data)
-			})
-			stream.on('end', function () {
-				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
+			pull(stream, pullCollect(function (err, s) {
+				t.notOk(err, 'no stream error')
+				t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
 				end()
-			})
+			}))
 		})
 	})
 
@@ -240,14 +236,11 @@ test.skip('Simultaneous websocket connections', function (t) {
 		t.equal(conn.id, server1.id, 'got connection from server 1')
 		conn.on('stream', function (name, stream) {
 			t.equal(name, 'myStream2', 'server 2 got stream')
-			var buffers = []
-			stream.on('data', function (data) {
-				buffers.push(data)
-			})
-			stream.on('end', function () {
-				t.equals(Buffer.concat(buffers).toString(), 'hi again', 'correct data')
+			pull(stream, pullCollect(function (err, s) {
+				t.notOk(err, 'no stream error')
+				t.ok(Buffer.concat(s).equals(new Buffer('hi again')), 'correct data')
 				end()
-			})
+			}))
 		})
 	})
 
@@ -258,9 +251,7 @@ test.skip('Simultaneous websocket connections', function (t) {
 		if (err)
 			return console.error(err)
 		server2Outgoing = conn
-		var stream = conn.openStream('myStream1')
-		stream.write('hi!')
-		stream.end()
+		pull(pullOnce(Buffer.from('hi!')), conn.openStream('myStream1'))
 	})
 
 	server1.connectTo({
@@ -270,13 +261,11 @@ test.skip('Simultaneous websocket connections', function (t) {
 		if (err)
 			return console.error(err)
 		server1Outgoing = conn
-		var stream = conn.openStream('myStream2')
-		stream.write('hi again')
-		stream.end()
+		pull(pullOnce(Buffer.from('hi again')), conn.openStream('myStream2'))
 	})
 })
 
-test.skip('Simultaneous upgrade to WebRTC', function (t) {
+test('Simultaneous upgrade to WebRTC', function (t) {
 	var server = new Connector({id: ids[0], wsPort: 8009})
 	var client1 = new Connector({id: ids[1]})
 	var client2 = new Connector({id: ids[2]})
@@ -292,9 +281,7 @@ test.skip('Simultaneous upgrade to WebRTC', function (t) {
 			if (err)
 				return
 
-			var stream = client1Outgoing.openStream('name')
-			stream.write('hi!')
-			stream.end()
+			pull(pullOnce(Buffer.from('hi!')), client1Outgoing.openStream('name'))
 		})
 
 		client2Incoming.upgrade(function (err) {
@@ -305,17 +292,14 @@ test.skip('Simultaneous upgrade to WebRTC', function (t) {
 
 		client2Incoming.on('stream', function (name, stream) {
 			t.equals(name, 'name', 'got stream on client2')
-			var buffers = []
-			stream.on('data', function (data) {
-				buffers.push(data)
-			})
-			stream.on('end', function () {
-				t.equals(Buffer.concat(buffers).toString(), 'hi!', 'correct data')
+			pull(stream, pullCollect(function (err, s) {
+				t.notOk(err, 'no stream error')
+				t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
 				client1.destroy()
 				client2.destroy()
 				server.destroy()
 				t.end()
-			})
+			}))
 		})
 	}
 
@@ -363,4 +347,9 @@ test.skip('Simultaneous upgrade to WebRTC', function (t) {
 		client2Server = conn
 		websocketsReady()
 	})
+})
+
+test('quit', function (t) {
+	t.end()
+	process.exit(0)
 })
