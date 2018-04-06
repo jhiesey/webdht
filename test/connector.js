@@ -265,7 +265,7 @@ test('Simultaneous websocket connections', function (t) {
 	})
 })
 
-test('Simultaneous upgrade to WebRTC', function (t) {
+test.skip('Simultaneous upgrade to WebRTC', function (t) {
 	var server = new Connector({id: ids[0], wsPort: 8009})
 	var client1 = new Connector({id: ids[1]})
 	var client2 = new Connector({id: ids[2]})

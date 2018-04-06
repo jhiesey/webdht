@@ -1,100 +1,148 @@
-const hat = require('hat')
-const http = require('http')
-const rpc = require('rpc-stream')
-
-let nodes = {}
-
-const peerOpts = {
-
-}
-
-let NODE_LISTEN_PORT = 8765
-
 /*
-High level idea:
-	* when node connects, assign it an id and store in nodes
+High level architecture:
+Server accepts two types of connections:
+1. Connections from test subjects (http and websocket)
+2. Connections from test runners
 
-	* provide testing api:
-		* node selection (random, neighbor of, etc.)
-		* connect, testStream
-		* handle errors
+Are these two types of connections piped together?
 
-	* log all events in db
+What happens on error?
+
+Let's say test subject connects to server, which then
+eventually connects to runner.
+On error/close, destroy connector(s)
 
 
+Runner -> server interface:
+* get node
+Does that wait for a node to be available?
+Presumably yes.
 
-Let's say tests run sequentially. There is a graph
-of what tests must have run before a given test.
-Each test has a timeout.
+How do we request browser vs. node subjects?
+OK, then connect via nested muxrpc *on both sides*
 
-What are preconditions for tests?
-* minimum total nodes (wait)
-* particular network structure (actively change)
 
-What tests do we want to run?
-* make sure we can connect to neighbors
-* make sure connections close when not needed
-
-OK, so maybe it's just *one* test which runs continuously.
-Could run other tests inside
 */
 
+const TEST_PORT = 8001
 
+const pullError = require('pull-stream/sources/error')
+const DuplexPair = require('pull-pair/duplex')
+const muxrpc = require('muxrpc')
+const defer = require('pull-defer')
+const wsServer = require('pull-ws/server')
+const http = require('http')
+const express = require('express')
+const path = require('path')
+const pull = require('pull-stream')
 
-// TODO: inherit from EventEmitter
-let Node = function (id, socket) {
-	var self = this
+const app = express()
+const server = http.createServer(app)
 
-	self.id = id
-	self.ready = false
-	self._r = new rpc({
-		ready: function (config) {
-			const wsPort = config.isBrowser ? undefined : NODE_LISTEN_PORT
-			self._handle.create({
-				id: id,
-				peer: peerOpts,
-				wsPort
-			}, function (err, success) {
-				if (err)
-					return self.error(err)
+app.use(express.static(path.join(__dirname, 'static')))
 
-				self.ready = true
-				self.emit('ready')
-			})
+const RPC = muxrpc(null, {
+	subject: 'duplex',
+	getSubject: 'duplex'
+})
+
+let subjects = [] // {type: 'type', stream: stream, conn: stream }
+let awaitingSubjects = [] // {type: 'type', cb: cb, conn: stream }
+
+let onNewSubject = function (type, stream, conn) {
+	for (let i = 0; i < awaitingSubjects.length; i++) {
+		let e = awaitingSubjects[i]
+		if (e.type === 'any' || e.type === type) {
+			awaitingSubjects.splice(i, 1)
+			e.cb(null, stream)
+		}
+	}
+
+	subjects.push({type: type, stream: stream, conn: conn})
+}
+
+let onGetSubject = function (type, conn) {
+	for (let i = 0; i < subjects.length; i++) {
+		let e = subjects[i]
+		if (type === 'any' || e.type === type) {
+			subjects.splice(i, 1)
+			console.log('returning existing stream')
+			return e.stream
+		}
+	}
+
+	console.log('waiting for stream')
+	let duplex = defer.duplex()
+
+	awaitingSubjects.push({
+		type: type,
+		cb: function (err, stream) {
+			duplex.resolve(stream)
 		},
-		connectionDirect: function () {
+		conn: conn
+	})
 
+	return duplex
+}
+
+let noop = function () {}
+
+let errorStream = function (err) {
+	return {
+		sink: noop,
+		source: pullError(err)
+	}
+}
+
+let socketServer = wsServer({
+	server: server,
+}, function (stream) {
+	console.log('NEW STREAM')
+	let subjectCalled = false
+	let getSubjectCalled = false
+	let handle = RPC({
+		subject: function (type) {
+			console.log('GOT SUBJECT', type)
+			if (subjectCalled || getSubjectCalled)
+				return errorStream(new Error('unexpected subject call'))
+			if (type === 'node' || type === 'web') {
+				let duplex = DuplexPair()
+				onNewSubject(type, duplex[0], stream)
+				subjectCalled = true
+				return duplex[1]
+			} else {
+				return errorStream(new Error('unexpected type'))
+			}
 		},
-		connectionClose: function () {
-
-		},
-		connected: function () {
-
-		},
-		duplicateConnection: function () {
-
-		},
-		duplicateStream: function () {
-
-		},
-		streamClose: function () {
-
-		},
-		data: function () {
-
-		},
-		end: function () {
-
-		},
-		globalerror: function () {
-
+		getSubject: function (type) {
+			console.log('GOT GETSUBJECT', type)
+			if (subjectCalled)
+				return errorStream(new Error('unexpected getSubject call'))
+			getSubjectCalled = true
+			return onGetSubject(type, stream)
 		}
 	})
-	socket.pipe(self._r).pipe(socket)
 
-	self._handle = self._r.wrap(['connectTo', 'create', 'destroy', 'createStream', 'write', 'end'])
-}
+	pull(stream, handle.createStream(function (err) {
+		for (let i = 0; i < subjects.length; i++) {
+			let e = subjects[i]
+			if (e.conn === stream) {
+				subjects.splice(i, 1)
+				i--
+			}
+		}
 
-Node.prototype.error = function (err) {
-	// log error
-}
+		for (let i = 0; i < awaitingSubjects.length; i++) {
+			let e = awaitingSubjects[i]
+			if (e.conn === stream) {
+				awaitingSubjects.splice(i, 1)
+				i--
+			}
+		}
+	}), stream)
+})
+
+server.listen(TEST_PORT, function (err) {
+	if (err) return console.error(err)
+	console.log('listening at http://localhost:' + TEST_PORT)
+})
