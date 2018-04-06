@@ -22,6 +22,8 @@ const RPC = muxrpc(manifests.client, manifests.server)
 // 	server.listen(config.listenPort)
 // }
 
+const noop = function () {}
+
 const RunnerRPC = muxrpc({
 	subject: 'duplex',
 	getSubject: 'duplex'
@@ -37,9 +39,10 @@ const TestClient = function (url) {
 			if (err)
 				return self.emit('error', err)
 
+			self._stream = stream
 			self._handle = RunnerRPC()
 			pull(stream, self._handle.createStream(function (err) {
-				self._destroy(err)
+				self.destroy(err)
 			}), stream)
 			self.emit('ready')
 		}
@@ -98,11 +101,12 @@ TestClient.prototype.getConnectors = function (optses, cb) {
 	}), cb)
 }
 
-TestClient.prototype._destroy = function (err) {
+TestClient.prototype.destroy = function (err) {
 	const self = this
 	if (self._destroyed) return
 
 	self._destroyed = true
+	self._stream.close()
 	self._handle = null
 	if (err)
 		self.emit('error', err)
@@ -112,32 +116,35 @@ TestClient.prototype._destroy = function (err) {
 const Node = function () {
 	let self = this
 
-	self.connectors = {}
+	self._connectors = {}
 	self._connectorForConnection = {}
 
 	self._handle = RPC({
 		hello: function () {
 			self.emit('hello')
 		},
-		onConnection: function (connectorId, id) {
-			let connector = self.connector[connectorId]
-			connector.emit('connection', connector._setupConn(id))
+		onConnection: function (connectorIdNum, idNum, id) {
+			// console.log('ON CONNECTION')
+			let connector = self._connectors[connectorIdNum]
+			connector.emit('connection', connector._setupConn(idNum, id))
 		},
 		connection: {
-			stream: function (id, name) {
-				let connection = self._connectorForConnection[id].connections[id]
+			stream: function (idNum, name) {
+				// console.log('ON STREAM')
+				let connection = self._connectorForConnection[idNum]._connections[idNum]
 				let duplex = DuplexPair()
 				connection.emit('stream', name, duplex[0])
 				return duplex[1]
 			},
-			close: function (id) {
-				let connection = self._connectorForConnection[id].connections[id]
+			close: function (idNum) {
+				let connection = self._connectorForConnection[idNum]._connections[idNum]
 				connection.emit('close')
-				delete self._connectorForConnection[id].connections[id]
-				delete self._connectorForConnection[id]
+				delete self._connectorForConnection[idNum]._connections[idNum]
+				delete self._connectorForConnection[idNum].connections[connection.id]
+				delete self._connectorForConnection[idNum]
 			},
-			direct: function (id) {
-				let connection = self._connectorForConnection[id].connections[id]
+			direct: function (idNum) {
+				let connection = self._connectorForConnection[idNum]._connections[idNum]
 				connection.emit('direct')
 			}
 		}
@@ -149,18 +156,20 @@ inherits(Node, EventEmitter)
 Node.prototype.createConnector = function (opts, cb) {
 	let self = this
 
-	self._handle.createConnector(opts, function (err, id) {
+	self._handle.createConnector(opts, function (err, idNum) {
 		if (err) return cb(err)
-		let connector = new Connector(id, self._handle, self._connectorForConnection)
-		self.connectors[id] = connector
+		let connector = new Connector(idNum, opts.id, self._handle, self._connectorForConnection)
+		self._connectors[idNum] = connector
 		cb(null, connector)
 	})
 }
 
-const Connector = function (id, handle, connectorForConnection) {
+const Connector = function (idNum, id, handle, connectorForConnection) {
 	let self = this
 	self.id = id
+	self._idNum = idNum
 	self._handle = handle
+	self._connections = {}
 	self.connections = {}
 	self._connectorForConnection = connectorForConnection
 }
@@ -169,33 +178,41 @@ inherits(Connector, EventEmitter)
 
 Connector.prototype.destroy = function (cb) {
 	let self = this
-	self._handle.connector.destroy(self.id, function (err) {
-		cb(err)
+	self._handle.connector.destroy(self._idNum, function (err) {
+		if (cb)
+			cb(err)
 	})
 }
 
 Connector.prototype.connectTo = function (descriptor, cb) {
 	let self = this
-	self._handle.connector.connectTo(self.id, descriptor, function (err, connId) {
+	let d = {
+		id: descriptor.id,
+		url: descriptor.url,
+		relay: descriptor.relay ? descriptor.relay._idNum : null
+	}
+	self._handle.connector.connectTo(self._idNum, d, function (err, connId) {
 		if (err) return cb(err)
 		cb(null, self._setupConn(connId))
 	})
 }
 
-Connector.prototype._setupConn = function (id) {
+Connector.prototype._setupConn = function (idNum, id) {
 	let self = this
-	let connection = self.connections[id]
+	let connection = self._connections[idNum]
 	if (!connection) {
-		connection = new Connection(id, self._handle)
+		connection = new Connection(idNum, id, self._handle)
+		self._connections[idNum] = connection
 		self.connections[id] = connection
-		self._connectorForConnection[id] = self
+		self._connectorForConnection[idNum] = self
 	}
 	return connection
 }
 
-const Connection = function (id, handle) {
+const Connection = function (idNum, id, handle) {
 	let self = this
 	self.id = id
+	self._idNum = idNum
 	self._handle = handle
 }
 
@@ -203,15 +220,19 @@ inherits(Connection, EventEmitter)
 
 Connection.prototype.openStream = function (name, cb) {
 	let self = this
-	return self._handle.connector.connection.openStream(self.id, name)
+	cb = cb || noop
+	return self._handle.connector.connection.openStream(self._idNum, name, cb)
 }
 
 Connection.prototype.close = function (cb) {
 	let self = this
-	self._handle.connector.connection.close(self.id, cb)
+	cb = cb || noop
+	self._handle.connector.connection.close(self._idNum, cb)
 }
 
 Connection.prototype.upgrade = function (cb) {
 	let self = this
-	self._handle.connector.connection.upgrade(self.id, cb)
+	// console.log('CALLING UPGRADE')
+	cb = cb || noop
+	self._handle.connector.connection.upgrade(self._idNum, cb)
 }

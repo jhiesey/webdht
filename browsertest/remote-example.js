@@ -19,14 +19,10 @@ var ids = [
 	'e2d436b8730be3b696e1073028f33ec349287f5a'
 ]
 
-test('Basic websocket connection', function (t) {
-	let client = new TestClient('ws://localhost:8001')
-	client.getConnectors([{id: ids[0], wsPort: 8009}, {id: ids[1]}], function (err, connectors) {
-		console.log('getConnectors RETURNED')
-		if (err) {
-			console.log(err)
-			return t.fail(err)
-		}
+test.skip('Basic websocket connection', function (t) {
+	let tc = new TestClient('ws://localhost:8001')
+	tc.getConnectors([{id: ids[0], wsPort: 8009}, {id: ids[1]}], function (err, connectors) {
+		t.notOk(err)
 		let server = connectors[0]
 		let client = connectors[1]
 
@@ -40,6 +36,7 @@ test('Basic websocket connection', function (t) {
 					t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
 					server.destroy()
 					client.destroy()
+					tc.destroy()
 					t.end()
 				}))
 			})
@@ -54,48 +51,103 @@ test('Basic websocket connection', function (t) {
 			pull(pullOnce(Buffer.from('hi!')), conn.openStream('myStream'))
 		})
 	})
-	
-
-
-	// var server = new Connector({id: ids[0], wsPort: 8009})
-	// var client = new Connector({id: ids[1]})
-
-	// server.on('connection', function (conn) {
-	// 	t.equal(conn.id, client.id, 'got connection from right client')
-	// 	conn.on('stream', function (name, stream) {
-	// 		t.equal(name, 'myStream', 'server got stream')
-
-	// 		pull(stream, pullCollect(function (err, s) {
-	// 			t.notOk(err, 'no stream error')
-	// 			t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
-	// 			server.destroy()
-	// 			client.destroy()
-	// 			t.end()
-	// 		}))
-	// 	})
-	// })
-
-	// client.connectTo({
-	// 	url: 'ws://localhost:8009'
-	// }, function (err, conn) {
-	// 	t.notOk(err, 'connectTo')
-	// 	if (err)
-	// 		return console.error(err)
-	// 	pull(pullOnce(Buffer.from('hi!')), conn.openStream('myStream'))
-	// })
 })
 
+test('Upgrade to WebRTC', function (t) {
+	let tc = new TestClient('ws://localhost:8001')
+	tc.getConnectors([{id: ids[0], wsPort: 8009}, {id: ids[1]}, {id: ids[2]}], function (err, connectors) {
+		t.notOk(err)
+		var server = connectors[0]
+		var client1 = connectors[1]
+		var client2 = connectors[2]
+		let client1Conn, client2Conn
 
+		var serverConns = []
+		server.on('connection', function (conn) {
+			serverConns.push(conn)
+			conn.on('close', function () {
+				console.log('SERVER CONN CLOSED')
+				serverConns.splice(serverConns.indexOf(conn), 1)
 
+				if (serverConns.length === 0) {
+					t.pass('server connections all closed')
+					// TODO: this is never running!
+					client1.destroy()
+					client2.destroy()
+					server.destroy()
+				}
+			})
+		})
 
-// client.on('ready', function () {
-// 	console.log('READY')
-// 	client.getNode('web', function (err, node) {
-// 		if (err)
-// 			return console.error('ERROR', err)
-// 		node.on('disconnect', function () {
-// 			console.log('DISCONNECTED')
-// 		})
-// 		console.log('GOT NODE')
-// 	})
-// })
+		client2.on('connection', function (conn) {
+			if (conn.id !== client1.id)
+				return
+			t.pass('got connection from right client')
+			conn.on('stream', function (name, stream) {
+				t.equals(name, 'name', 'got stream on client2')
+
+				pull(stream, pullCollect(function (err, s) {
+					t.notOk(err, 'no stream error')
+					t.ok(Buffer.concat(s).equals(new Buffer('hi!')), 'correct data')
+
+					client1Conn.close()
+					client2Conn.close()
+
+					// TODO: should happen above
+					client1.destroy()
+					client2.destroy()
+					server.destroy()
+
+					tc.destroy()
+					t.end()
+				}))
+			})
+		})
+
+		var count = 0
+		function ready() {
+			if (++count < 2)
+				return
+
+			client1.connectTo({
+				id: client2.id,
+				relay: client1Server
+			}, function (err, conn) {
+				t.notOk(err, 'indirect connectTo')
+				if (err)
+					return console.error(err)
+
+				conn.upgrade(function (err) {
+					t.notOk(err, 'upgraded')
+					if (err)
+						return
+
+					pull(pullOnce(Buffer.from('hi!')), conn.openStream('name'))
+				})
+			})
+		}
+
+		client1.connectTo({
+			url: 'ws://localhost:8009'
+		}, function (err, conn) {
+			client1Conn = conn
+			t.notOk(err, 'client1 connectTo')
+			if (err)
+				return console.error(err)
+			client1Server = conn
+			ready()
+		})
+
+		client2.connectTo({
+			url: 'ws://localhost:8009'
+		}, function (err, conn) {
+			client2Conn = conn
+			t.notOk(err, 'client2 connectTo')
+			if (err)
+				return console.error(err)
+			client2Server = conn
+			ready()
+		})
+	})
+
+})

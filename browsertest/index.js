@@ -24,61 +24,69 @@ const WebdhtDriver = function (config) {
 	self._config = config
 	self._connectors = {}
 	self._connections = {}
-	self._nextId = 0
+	self._nextIdNum = 0
 	self._destroyed = false
 
-	let setupConn = function (connectorId, conn) {
-		let id = Object.keys(self._connections).find(function (elem) {
+	let setupConn = function (connectorIdNum, conn) {
+		let idNum = Object.keys(self._connections).find(function (elem) {
 			return elem === conn
 		})
-		if (id === undefined) {
-			id = self._nextId++
-			self._connections[id] = conn
-			self._handle.onConnection(connectorId, id, noop)
+		if (idNum === undefined) {
+			idNum = self._nextIdNum++
+			self._connections[idNum] = conn
+			self._handle.onConnection(connectorIdNum, idNum, conn.id, noop)
 			conn.on('stream', function (name, stream) {
-				pull(stream, self._handle.stream(id, name), stream)
+				console.log('CLIENT STREAM')
+				pull(stream, self._handle.connection.stream(idNum, name, noop), stream)
 			})
 			conn.on('close', function () {
-				self._handle.connection.close(id, noop)
+				self._handle.connection.close(idNum, noop)
 			})
 			conn.on('direct', function () {
-				self._handle.connection.direct(id, noop)
+				self._handle.connection.direct(idNum, noop)
 			})
 		}
-		return id
+		return idNum
 	}
 
 	self._handle = RPC({
 		createConnector: function (opts) {
 			let connector = new Connector(opts)
-			let id = self._nextId++
-			self._connectors[id] = connector
+			let idNum = self._nextIdNum++
+			self._connectors[idNum] = connector
 			connector.on('connection', function (conn) {
-				setupConn(id, conn)
+				setupConn(idNum, conn)
 			})
-			return id
+			return idNum
 		},
 		connector: {
-			destroy: function (id) {
-				self._connectors[id].destroy()
-				delete self._connectors[id]
+			destroy: function (idNum) {
+				self._connectors[idNum].destroy()
+				delete self._connectors[idNum]
 			},
-			connectTo: function (id, descriptor, cb) {
-				self._connectors[id].connectTo(descriptor, function (err, conn) {
+			connectTo: function (idNum, descriptor, cb) {
+				if (descriptor.relay)
+					descriptor.relay = self._connections[descriptor.relay]
+				self._connectors[idNum].connectTo(descriptor, function (err, conn) {
 					if (err)
 						return cb(err)
-					cb(err, setupConn(id, conn))
+					cb(err, setupConn(idNum, conn))
 				})
 			},
 			connection: {
-				openStream: function (id, name) {
-					return self._connections[id].openStream(name)
+				openStream: function (idNum, name) {
+					return self._connections[idNum].openStream(name)
 				},
-				close: function (id) {
-					self._connections[id].close()
+				close: function (idNum) {
+					self._connections[idNum].close()
 				},
-				upgrade: function (id, cb) {
-					self._connections[id].upgrade(cb)
+				upgrade: function (idNum, cb) {
+					// console.log('UPGRADE CALLED')
+					// self._connections[idNum].upgrade(function (err) {
+					// 	console.log('UPGRADE CALLBACK')
+					// 	cb(err)
+					// })
+					self._connections[idNum].upgrade(cb)
 				}
 			}
 		}
@@ -142,7 +150,7 @@ WebdhtDriver.prototype.destroy = function () {
 	})
 
 	if (self._handle)
-		self._handle.close()
+		self._handle.close(noop)
 	if (self._serverHandle)
 		self._serverHandle.close()
 }
