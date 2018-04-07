@@ -63,7 +63,8 @@ TestClient.prototype.getNode = function (type, cb) {
 	let stream = self._handle.getSubject(type, function (err) {
 		if (err) cb(err)
 	})
-	let node = new Node() // TODO: list of nodes?
+	let node = new Node()
+	node.on('error', self.emit.bind(self, 'error'))
 	pull(stream, node._handle.createStream(function (err) {
 		if (err)
 			cb(err)
@@ -122,6 +123,10 @@ const Node = function () {
 	self._handle = RPC({
 		hello: function () {
 			self.emit('hello')
+		},
+		globalerror: function (args) {
+			console.log('GLOBAL ERROR')
+			self.emit('error', new Error(args.message, args.source, args.lineno))
 		},
 		onConnection: function (connectorIdNum, idNum, id) {
 			// console.log('ON CONNECTION')

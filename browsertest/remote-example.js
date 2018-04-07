@@ -21,6 +21,9 @@ var ids = [
 
 test.skip('Basic websocket connection', function (t) {
 	let tc = new TestClient('ws://localhost:8001')
+	tc.on('error', function (err) {
+		t.fail(err)
+	})
 	tc.getConnectors([{id: ids[0], wsPort: 8009}, {id: ids[1]}], function (err, connectors) {
 		t.notOk(err)
 		let server = connectors[0]
@@ -55,6 +58,9 @@ test.skip('Basic websocket connection', function (t) {
 
 test('Upgrade to WebRTC', function (t) {
 	let tc = new TestClient('ws://localhost:8001')
+	tc.on('error', function (err) {
+		t.fail(err)
+	})
 	tc.getConnectors([{id: ids[0], wsPort: 8009}, {id: ids[1]}, {id: ids[2]}], function (err, connectors) {
 		t.notOk(err)
 		var server = connectors[0]

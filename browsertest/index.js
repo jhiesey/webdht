@@ -156,7 +156,10 @@ WebdhtDriver.prototype.destroy = function () {
 }
 
 WebdhtDriver.prototype.globalerror = function (args) {
-	// TODO: this
+	const self = this
+	if (self._destroyed) return
+
+	self._handle.globalerror(args, noop)
 }
 
 module.exports = WebdhtDriver
@@ -179,7 +182,13 @@ if (global.location) {
 
 console.log('CONTROL SERVER:', controlServer)
 
+let initialCall = true
 function makeDriver () {
+	if (!initialCall) {
+		if (global.window)
+			global.location.reload(true)
+	}
+	initialCall = false
 	console.log('makeDriver')
 	const driver = new WebdhtDriver({
 		controlServer: controlServer
@@ -193,12 +202,24 @@ function makeDriver () {
 		console.error('TIMEOUT')
 		restart()
 	}, CONNECTION_TIMEOUT * 1000)
-	global.onerror = function (message, source, lineno, colno) {
-		driver.globalerror({
-			message,
-			source,
-			lineno,
-			colno
+	if (global.window) {
+		global.onerror = function (message, source, lineno, colno) {
+			console.log('CALLING globalerror')
+			driver.globalerror({
+				message,
+				source,
+				lineno,
+				colno
+			})
+			return true
+		}
+	} else if (global.process) {
+		process.on('uncaughtException', function (err) {
+			driver.globalerror({
+				message: err.message,
+				source: err.fileName,
+				lineno: err.lineNumber
+			})
 		})
 	}
 	let ready = false
@@ -213,7 +234,7 @@ function makeDriver () {
 			driver.destroy()
 			makeDriver()
 		} else {
-			console.error(err)
+			// console.error(err)
 			restart()
 		}
 	})

@@ -1,6 +1,7 @@
 exports.server = {
-	hello: 'sync', // TODO: implement
+	hello: 'sync',
 	onConnection: 'sync',
+	globalerror: 'sync',
 
 	connection: {
 		stream: 'duplex',
