@@ -1,3 +1,19 @@
+TODO:
+
+Connector:
+* refcounting
+* depth calculation/updating
+* websocket upgrades
+
+Overlay:
+* queries
+* use routing table
+
+Routing Table:
+* lookup
+* eviction
+
+
 Architecture:
 
 * Nodes have id and zero or more urls
