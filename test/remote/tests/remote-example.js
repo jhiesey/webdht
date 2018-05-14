@@ -1,4 +1,4 @@
-const TestClient = require('./remote-connector')
+const TestClient = require('../client/remote-connector')
 const test = require('tape')
 const async = require('async')
 

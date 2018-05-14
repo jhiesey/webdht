@@ -4,9 +4,11 @@
   "description": "A DHT that runs in the browser",
   "main": "index.js",
   "scripts": {
-    "test": "tape test/*.js",
-    "coverage": "istanbul cover test/*.js",
-    "test-server": "browserify browsertest/index.js > browsertest/server/static/bundle.js && node browsertest/server/index.js"
+    "test": "tape test/local/*.js",
+    "coverage": "istanbul cover test/local/*.js",
+    "test-server": "browserify test/remote/harness/index.js > test/remote/server/static/bundle.js && node test/remote/server/index.js",
+    "test-harness-node": "node test/remote/harness/index.js ws://localhost:8001",
+    "test-remote": "node test/remote/tests/*.js"
   },
   "repository": {
     "type": "git",
@@ -30,7 +32,6 @@
     "browserify": "^16.1.0",
     "dezalgo": "^1.0.3",
     "duplexify": "^3.4.2",
-    "electron-webrtc": "^0.3.0",
     "extend": "^3.0.1",
     "hat": "0.0.3",
     "inherits": "^2.0.1",
@@ -53,9 +54,11 @@
     "tape": "^4.9.0"
   },
   "optionalDependencies": {
+    "electron-webrtc": "^0.3.0",
     "wrtc": "0.0.65"
   },
   "browser": {
+    "electron-webrtc": false,
     "wrtc": false
   }
 }

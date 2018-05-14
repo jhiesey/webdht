@@ -1,5 +1,5 @@
 
-const manifests = require('./manifests')
+const manifests = require('../manifests')
 
 const EventEmitter = require('events').EventEmitter
 const inherits = require('inherits')

@@ -1,5 +1,5 @@
-const Connector = require('../lib/connector')
-const manifests = require('./manifests')
+const Connector = require('../../../lib/connector')
+const manifests = require('../manifests')
 
 const EventEmitter = require('events').EventEmitter
 const inherits = require('inherits')
