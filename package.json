@@ -41,11 +41,11 @@
     "stream-to-pull-stream": "^1.7.2"
   },
   "devDependencies": {
-    "airtap": "0.0.4",
+    "airtap": "0.0.5",
     "async": "^2.6.0",
     "express": "^4.16.3",
     "istanbul": "^0.4.5",
-    "proxyquire": "^1.7.3",
+    "proxyquire": "^2.0.1",
     "pull-defer": "^0.2.2",
     "tape": "^4.9.0"
   },

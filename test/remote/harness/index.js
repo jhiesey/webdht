@@ -7,16 +7,13 @@ const muxrpc = require('muxrpc')
 const wsClient = require('pull-ws/client')
 const pull = require('pull-stream')
 
-const RPC = muxrpc(manifests.server, manifests.client)
+const RPC = muxrpc(manifests.remoteConnector, manifests.connector)
 
 const noop = function () {}
 
 const type = global.window ? 'web' : 'node'
 
-const ServerRPC = muxrpc({
-	subject: 'duplex',
-	getSubject: 'duplex'
-}, null)
+const ServerRPC = muxrpc(manifests.server, null)
 
 const WebdhtDriver = function (config) {
 	let self = this
@@ -106,7 +103,7 @@ const WebdhtDriver = function (config) {
 			self.emit('ready')
 
 			self._serverHandle = ServerRPC()
-			let subjectStream = self._serverHandle.subject(type, function (err) {
+			let subjectStream = self._serverHandle.subjectAvailable(type, function (err) {
 				console.log('subject callback')
 				if (!self._destroyed && err)
 					self.emit('error', err)

@@ -1,4 +1,4 @@
-const TestClient = require('../client/remote-connector')
+const RemoteConnectorClient = require('../client/remote-connector')
 const test = require('tape')
 const async = require('async')
 
@@ -20,7 +20,7 @@ var ids = [
 ]
 
 test.skip('Basic websocket connection', function (t) {
-	let tc = new TestClient('ws://localhost:8001')
+	let tc = new RemoteConnectorClient('ws://localhost:8001')
 	tc.on('error', function (err) {
 		t.fail(err)
 	})
@@ -57,7 +57,7 @@ test.skip('Basic websocket connection', function (t) {
 })
 
 test('Upgrade to WebRTC', function (t) {
-	let tc = new TestClient('ws://localhost:8001')
+	let tc = new RemoteConnectorClient('ws://localhost:8001')
 	tc.on('error', function (err) {
 		t.fail(err)
 	})

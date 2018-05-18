@@ -1,4 +1,4 @@
-exports.server = {
+exports.remoteConnector = {
 	hello: 'sync',
 	onConnection: 'sync',
 	globalerror: 'sync',
@@ -10,7 +10,7 @@ exports.server = {
 	}
 }
 
-exports.client = {
+exports.connector = {
 	createConnector: 'sync',
 	connector: {
 		destroy: 'sync',
@@ -21,4 +21,9 @@ exports.client = {
 			upgrade: 'async'
 		}
 	}
+}
+
+exports.server = {
+	subjectAvailable: 'duplex',
+	getConnector: 'duplex'
 }

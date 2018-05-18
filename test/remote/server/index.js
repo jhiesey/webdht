@@ -26,6 +26,8 @@ OK, then connect via nested muxrpc *on both sides*
 
 const TEST_PORT = 8001
 
+const manifests = require('../manifests')
+
 const pullError = require('pull-stream/sources/error')
 const DuplexPair = require('pull-pair/duplex')
 const muxrpc = require('muxrpc')
@@ -41,10 +43,7 @@ const server = http.createServer(app)
 
 app.use(express.static(path.join(__dirname, 'static')))
 
-const RPC = muxrpc(null, {
-	subject: 'duplex',
-	getSubject: 'duplex'
-})
+const RPC = muxrpc(null, manifests.server)
 
 let subjects = [] // {type: 'type', stream: stream, conn: stream }
 let awaitingSubjects = [] // {type: 'type', cb: cb, conn: stream }
@@ -61,7 +60,7 @@ let onNewSubject = function (type, stream, conn) {
 	subjects.push({type: type, stream: stream, conn: conn})
 }
 
-let onGetSubject = function (type, conn) {
+let onGetConnector = function (type, conn) {
 	for (let i = 0; i < subjects.length; i++) {
 		let e = subjects[i]
 		if (type === 'any' || e.type === type) {
@@ -99,11 +98,11 @@ let socketServer = wsServer({
 }, function (stream) {
 	console.log('NEW STREAM')
 	let subjectCalled = false
-	let getSubjectCalled = false
+	let getConnectorCalled = false
 	let handle = RPC({
-		subject: function (type) {
+		subjectAvailable: function (type) {
 			console.log('GOT SUBJECT', type)
-			if (subjectCalled || getSubjectCalled)
+			if (subjectCalled || getConnectorCalled)
 				return errorStream(new Error('unexpected subject call'))
 			if (type === 'node' || type === 'web') {
 				let duplex = DuplexPair()
@@ -114,12 +113,12 @@ let socketServer = wsServer({
 				return errorStream(new Error('unexpected type'))
 			}
 		},
-		getSubject: function (type) {
-			console.log('GOT GETSUBJECT', type)
+		getConnector: function (type) {
+			console.log('GOT GETCONNECTOR', type)
 			if (subjectCalled)
-				return errorStream(new Error('unexpected getSubject call'))
-			getSubjectCalled = true
-			return onGetSubject(type, stream)
+				return errorStream(new Error('unexpected getConnector call'))
+			getConnectorCalled = true
+			return onGetConnector(type, stream)
 		}
 	})
 

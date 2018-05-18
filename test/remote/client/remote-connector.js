@@ -10,7 +10,7 @@ const pull = require('pull-stream')
 const once = require('once')
 const async = require('async')
 
-const RPC = muxrpc(manifests.client, manifests.server)
+const RPC = muxrpc(manifests.connector, manifests.remoteConnector)
 
 // const WebdhtDriverServer = function (config) {
 // 	let server = wsServer(function (stream) {
@@ -24,13 +24,10 @@ const RPC = muxrpc(manifests.client, manifests.server)
 
 const noop = function () {}
 
-const RunnerRPC = muxrpc({
-	subject: 'duplex',
-	getSubject: 'duplex'
-}, null)
+const RunnerRPC = muxrpc(manifests.server, null)
 
-const TestClient = function (url) {
-	if (!(this instanceof TestClient)) return new TestClient(url)
+const RemoteConnectorClient = function (url) {
+	if (!(this instanceof RemoteConnectorClient)) return new RemoteConnectorClient(url)
 	const self = this
 
 	wsClient(url, {
@@ -49,10 +46,10 @@ const TestClient = function (url) {
 	})
 }
 
-module.exports = TestClient
-inherits(TestClient, EventEmitter)
+module.exports = RemoteConnectorClient
+inherits(RemoteConnectorClient, EventEmitter)
 
-TestClient.prototype.getNode = function (type, cb) {
+RemoteConnectorClient.prototype.getNode = function (type, cb) {
 	const self = this
 
 	if (!self._handle)
@@ -60,7 +57,7 @@ TestClient.prototype.getNode = function (type, cb) {
 
 	cb = once(cb)
 
-	let stream = self._handle.getSubject(type, function (err) {
+	let stream = self._handle.getConnector(type, function (err) {
 		if (err) cb(err)
 	})
 	let node = new Node()
@@ -76,7 +73,7 @@ TestClient.prototype.getNode = function (type, cb) {
 	})
 }
 
-TestClient.prototype.getNodes = function (types, cb) {
+RemoteConnectorClient.prototype.getNodes = function (types, cb) {
 	const self = this
 
 	async.parallel(types.map(function (type) {
@@ -84,7 +81,7 @@ TestClient.prototype.getNodes = function (types, cb) {
 	}), cb)
 }
 
-TestClient.prototype.getConnectors = function (optses, cb) {
+RemoteConnectorClient.prototype.getConnectors = function (optses, cb) {
 	const self = this
 
 	async.parallel(optses.map(function (opts) {
@@ -102,7 +99,7 @@ TestClient.prototype.getConnectors = function (optses, cb) {
 	}), cb)
 }
 
-TestClient.prototype.destroy = function (err) {
+RemoteConnectorClient.prototype.destroy = function (err) {
 	const self = this
 	if (self._destroyed) return
 
