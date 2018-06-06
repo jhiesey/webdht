@@ -1,29 +1,23 @@
-exports.remoteConnector = {
-	hello: 'sync',
-	onConnection: 'sync',
-	globalerror: 'sync',
-
-	connection: {
-		stream: 'duplex',
-		close: 'sync',
-		direct: 'sync'
-	}
+exports.remoteOverlay = {
+	onStream: 'duplex',
+	onError: 'sync'
 }
 
-exports.connector = {
-	createConnector: 'sync',
-	connector: {
-		destroy: 'sync',
-		connectTo: 'async',
-		connection: {
-			openStream: 'duplex',
-			close: 'sync',
-			upgrade: 'async'
-		}
-	}
+exports.overlay = {
+	createOverlay: 'async',
+	openStream: 'duplex'
 }
 
 exports.server = {
-	subjectAvailable: 'duplex',
-	getConnector: 'duplex'
+	// from overlay
+	overlay: {
+		subjectAvailable: 'sync',
+		onStream: 'duplex'
+	},
+
+	// from remote
+	remote: {
+		openStream: 'duplex',
+		getOverlay: 'async'
+	}
 }
